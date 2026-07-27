@@ -1,0 +1,8 @@
+[Unit]
+Description=Queue USB Scanner service failure notification
+
+[Service]
+Type=oneshot
+WorkingDirectory=__PROJECT_ROOT__
+ExecStart=__PROJECT_ROOT__/.venv/bin/python3 __PROJECT_ROOT__/tools/email_admin.py service-failure
+User=root

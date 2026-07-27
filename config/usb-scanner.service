@@ -1,0 +1,26 @@
+[Unit]
+Description=USB Scanner Security Engine
+After=usbguard.service clamav-daemon.service local-fs.target
+Wants=usbguard.service
+OnFailure=usb-scanner-failure.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_ROOT__
+ExecStart=__PROJECT_ROOT__/run.sh --service-run
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+KillSignal=SIGINT
+User=root
+Group=usb-scanner
+RuntimeDirectory=usb-scanner
+RuntimeDirectoryMode=0770
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

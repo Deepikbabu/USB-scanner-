@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+.venv/
+
+# Database files
+*.db
+malware_hashes.db
+test_malware.db
+
+# Generated reports & logs
+reports/
+scan_log.json
+whitelist.json
+
+
+# IDEs and Editors
+.vscode/
+
+# Temporary test scripts
+test_pdf.py
+
+# Legacy/local email configuration (production uses /etc/usb-scanner/email.env)
+email_config.json

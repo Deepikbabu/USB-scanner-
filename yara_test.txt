@@ -1,0 +1,23 @@
+X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*
+
+
+(venv) raspberrypi@raspberrypi:~/usb-scanner $ sudo ./run.sh 
+[+] Database ready: /home/raspberrypi/usb-scanner/malware_hashes.db
+[*] Starting USB Security Engine (Ctrl+C to stop)...
+[*] For storage accept/block enforcement and HID blocking, run with sudo: sudo ./run.sh
+
+Traceback (most recent call last):
+  File "/home/raspberrypi/usb-scanner/changed.py", line 32, in <module>
+    from backend.scanner.yara_engine import scan_bytes as yara_scan_bytes
+  File "/home/raspberrypi/usb-scanner/backend/scanner/__init__.py", line 5, in <module>
+    from backend.scanner.usb_monitor import USBMonitor
+  File "/home/raspberrypi/usb-scanner/backend/scanner/usb_monitor.py", line 10, in <module>
+    from backend.services.scan_service import ScanService
+  File "/home/raspberrypi/usb-scanner/backend/services/__init__.py", line 3, in <module>
+    from backend.services.container import ServiceContainer
+  File "/home/raspberrypi/usb-scanner/backend/services/container.py", line 8, in <module>
+    from backend.services.scan_service import ScanService
+  File "/home/raspberrypi/usb-scanner/backend/services/scan_service.py", line 11, in <module>
+    from backend.reports.generator import ReportGenerator
+ModuleNotFoundError: No module named 'backend.reports'
+(venv) raspberrypi@raspberrypi:~/usb-scanner $ 

@@ -1,0 +1,9 @@
+{
+  "_comment": "Only administrator-reviewed verified/high mappings affect risk.",
+  "413c:2113": {
+    "manufacturer": "Dell",
+    "model": "KB216",
+    "cpe": null,
+    "confidence": "none"
+  }
+}

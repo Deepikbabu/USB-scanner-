@@ -1,0 +1,64 @@
+printf 'X5O!P%%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > yara_test.txt
+
+[ DEVICE TYPE CHECK ]
+  Vendor : USB
+  Model  : SanDisk_3.2Gen1
+  VID:PID: 0781:5591
+
+  Use ↑ / ↓ to choose the device type, then press Enter.
+
+  ➜ Storage / USB Drive
+    Scanner
+    Keyboard
+    Mouse
+    Phone / MTP / PTP
+    Printer
+    Camera
+    Hub / Adapter
+    Other / Unknown
+
+[ EVENT ] USB Device Detected - Analyzing...
+/home/raspberrypi/usb-scanner/changed.py:1704: DeprecationWarning: Will be removed in 1.0. Access properties with Device.properties.
+  if parent and parent.device_path == device.device_path:
+[*] Found partition: /dev/sdc
+[*] USB auto-mounted at /media/raspberrypi/DAB7-E812; unmounting before safety scan.
+[+] Quarantine-mounted read-only at /tmp/usb_scanner_quarantine/sdc
+[+] Scanning from /tmp/usb_scanner_quarantine/sdc
+
+[ SCANNING ] High-Speed Threaded FS Analysis...
+
+                                                                                
+============================================================
+        COMPLETE USB DEVICE SECURITY REPORT        
+============================================================
+  Time           : 2026-07-02 13:55:06.679881
+  Vendor         : USB
+  Model          : SanDisk_3.2Gen1
+  VID:PID        : 0781:5591
+  Serial         : 0401b21bf79486416e44a7ed556860e46643b869f41ff07b089f79af8328ec66c47200000000000000000000b02f452c001390189155810724b21b40
+  USB Class      : Unknown
+  USB Driver     : Unknown
+------------------------------------------------------------
+  Hardware Risk  : 0
+  Storage Risk   : 0
+  HID Risk       : 0
+  Policy Risk    : 0
+  Total Risk     : 0
+  Threat Level   : CLEAN
+  Declared Type  : storage
+  Detected Type  : storage
+
+  Scanned Paths:
+    - /tmp/usb_scanner_quarantine/sdc
+============================================================
+
+[+] PDF Report Generated: /home/raspberrypi/usb-scanner/reports/scan_report_0781_5591_20260702_135506.pdf
+[*] Device is CLEAN. Accepting device for user access...
+
+  [*] Trust this storage device for future fingerprint checks? (y/n): [DEBUG AUDIO] paplay (auto env) returncode=0 stderr=
+y
+  [+] Storage device 0781:5591 stored with serial and fingerprint.
+
+[✓] Device accepted and mounted for user access at /media/raspberrypi/DAB7-E812
+  [✓] Authorized USB port 1-1.4 for use.
+[OK] Device analysis complete. Ready for next device...
