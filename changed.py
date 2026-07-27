@@ -48,8 +48,28 @@ from backend.scanner.yara_engine import scan_bytes as yara_scan_bytes
 from backend.scanner import hid_policy
 from backend.scanner import storage_policy
 from backend.scanner import quarantine as quarantine_policy
-from backend.reports.incident import normalize_verdict as normalize_incident_verdict
-from backend.reports.evidence import build_evidence
+try:
+    from backend.reports.incident import normalize_verdict as normalize_incident_verdict
+    from backend.reports.evidence import build_evidence
+except ImportError:  # Compatibility with older deployed copies during migration.
+    def normalize_incident_verdict(value):
+        value = str(value or "").upper().strip()
+        return value if value in {"CLEAN", "TRUSTED", "SUSPICIOUS", "DANGEROUS", "INCOMPLETE"} else "INCOMPLETE"
+
+    def build_evidence(*, incident_id, device, verdict, risk_breakdown=None,
+                       findings=None, scan_coverage=None, fingerprints=None,
+                       quarantine=None, timing=None, recommendations=None):
+        payload = dict(device or {})
+        payload["incident_id"] = incident_id
+        return {"incident_id": incident_id, "device": payload,
+                "verdict": normalize_incident_verdict(verdict),
+                "risk_breakdown": dict(risk_breakdown or {}),
+                "findings": list(findings or []),
+                "scan_coverage": dict(scan_coverage or {}),
+                "fingerprints": dict(fingerprints or {}),
+                "quarantine": list(quarantine or []),
+                "timing": dict(timing or {}),
+                "recommendations": list(recommendations or [])}
 from backend.security.intelligence import (
     NVDClient, SignedTrustStore, hardware_fingerprint, interface_fingerprint,
     device_identity_fingerprint, identity_quality, incident_verdict, risk_breakdown,
