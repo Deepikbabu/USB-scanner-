@@ -63,6 +63,20 @@ class BackendClient(QObject):
             "action_id": action_id, "decision": decision
         })
 
+    def recover_hid(self):
+        """Request recovery of connected trusted HID devices."""
+        return self.command("recover_hid")
+
+    def list_quarantine(self):
+        return self.command("list_quarantine")
+
+    def restore_quarantine(self, index):
+        return self.command("restore_quarantine", {"index": index, "confirm": True})
+
+    def delete_quarantine(self, index):
+        return self.command("delete_quarantine", {"index": index, "confirm": True})
+
+
     def _run(self):
         while self._running:
             try:
@@ -88,13 +102,19 @@ class BackendClient(QObject):
 
     def _receive(self, sock):
         buffer = b""
+        last_heartbeat = time.monotonic()
         while self._running and self._socket is sock:
             try:
                 chunk = sock.recv(65536)
             except socket.timeout:
+                if time.monotonic() - last_heartbeat >= 10:
+                    if not self.command("ping"):
+                        return
+                    last_heartbeat = time.monotonic()
                 continue
             if not chunk:
                 return
+            last_heartbeat = time.monotonic()
             buffer += chunk
             while b"\n" in buffer:
                 raw, buffer = buffer.split(b"\n", 1)

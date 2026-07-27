@@ -613,6 +613,24 @@ class ScanPage(QWidget):
         card_layout.addWidget(self.quarantine_card)
         self.quarantine_rows = []
         self.quarantine_card.hide()
+
+        self.storage_status_card = GlassCard()
+        storage_layout = QVBoxLayout(self.storage_status_card)
+        storage_layout.setContentsMargins(24, 18, 24, 18)
+        title = QLabel("STORAGE SECURITY STATUS")
+        title.setStyleSheet(f"color: {theme_manager.get_color('text_secondary')}; font-size: 10px; font-weight: 800;")
+        self.lbl_storage_mount = QLabel("Mount: NOT CONNECTED")
+        self.lbl_storage_isolation = QLabel("Isolation: UNKNOWN")
+        self.lbl_storage_coverage = QLabel("Coverage: not available")
+        self.lbl_storage_engines = QLabel("Engines: not available")
+        self.lbl_storage_verdict = QLabel("Verdict: pending")
+        self.lbl_storage_quarantine = QLabel("Quarantine: none")
+        for label in (self.lbl_storage_mount, self.lbl_storage_isolation, self.lbl_storage_coverage,
+                      self.lbl_storage_engines, self.lbl_storage_verdict, self.lbl_storage_quarantine):
+            label.setStyleSheet(f"color: {theme_manager.get_color('text_secondary')}; font-size: 12px;")
+            storage_layout.addWidget(label)
+        storage_layout.insertWidget(0, title)
+        card_layout.addWidget(self.storage_status_card)
         
         # Dynamic Warning Banners Area
         self.warnings_container = QWidget()
@@ -832,6 +850,34 @@ class ScanPage(QWidget):
             self.scan_timer.stop(); self.stats_timer.stop()
             self.usb_scanner.set_scanning(False)
 
+    def apply_backend_engines(self, data):
+        """Display authoritative engine/isolation readiness from the backend."""
+        engines = ", ".join(
+            f"{name.upper()}: {'READY' if bool(data.get(name)) else 'UNAVAILABLE'}"
+            for name in ("yara", "clamav", "usbguard") if name in data
+        )
+        if engines:
+            self.lbl_storage_engines.setText(f"Engines: {engines}")
+            self.add_log_card(f"Backend readiness — {engines}")
+
+    def apply_backend_storage_status(self, data):
+        coverage = data.get("scan_coverage") or {}
+        mount = data.get("mount_path") or data.get("mount")
+        if mount:
+            self.lbl_storage_mount.setText(f"Mount: {mount}")
+        self.lbl_storage_isolation.setText(
+            "Isolation: " + ("VERIFIED" if data.get("isolation_verified") else "BLOCKED/UNKNOWN")
+        )
+        if coverage:
+            self.lbl_storage_coverage.setText(
+                f"Coverage: {coverage.get('fully_scanned_files', coverage.get('scanned_files', 0))}/"
+                f"{coverage.get('total_files', 0)} files"
+            )
+        if data.get("verdict"):
+            self.lbl_storage_verdict.setText(f"Verdict: {data['verdict']}")
+        quarantine = data.get("quarantine_paths") or data.get("quarantine") or []
+        self.lbl_storage_quarantine.setText(f"Quarantine: {len(quarantine)} item(s)")
+
     def apply_backend_finding(self, data):
         severity = str(data.get("severity", "INFO")).upper()
         finding = str(data.get("finding") or data.get("message") or "Security finding")
@@ -964,12 +1010,13 @@ class ScanPage(QWidget):
         self.progress_bar.set_draw_check(False)
         self.lbl_status.setText("Deep Physical Scanning Engine")
         
-        # Timers activation
-        self.scan_timer.start(250)
-        self.stats_timer.start(1000)
+        # Progress and completion are authoritative backend events. Do not
+        # advance a synthetic local scan while the service is working.
+        self.scan_timer.stop()
+        self.stats_timer.stop()
 
     def advance_scan(self):
-        self.scan_progress += random.randint(4, 9)
+        return
         if self.scan_progress >= 100:
             self.scan_progress = 100
             self.progress_bar.setValue(100)
@@ -1096,8 +1143,7 @@ class ScanPage(QWidget):
             self.elapsed_seconds += 1
             rate = self.scan_progress / self.elapsed_seconds if self.elapsed_seconds > 0 else 0.1
             remaining = int((100 - self.scan_progress) / rate) if rate > 0 else 8
-            speed = random.randint(20, 24)
-            self.stats_card.update_stats(self.elapsed_seconds, remaining, speed)
+            self.stats_card.update_stats(self.elapsed_seconds, remaining, 0)
 
     def add_log_card(self, message):
         card = LogCard(message)

@@ -69,10 +69,7 @@ class ScanAnalyticsGraph(GlassCard):
         self.setMouseTracking(True)
         
         # Raw chart data
-        self.days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        self.scores = [18, 42, 30, 67, 15, 54, 25]
-        self.devices = ["Cruzer Blade USB", "SanDisk Ultra 3.0", "Kingston DT", "Samsung SSD T7", "WD My Passport", "Generic Mouse", "Corsair K70"]
-        self.results = ["Safe (Clean)", "Low Risk", "Clean Scan", "High Threat Blocked", "Safe", "Authorized", "Clean Scan"]
+        self.days, self.scores, self.devices, self.results = [], [], [], []
         
         self.hovered_index = -1
         self.animation_progress = 0.0
@@ -831,13 +828,7 @@ class TimelineWidget(GlassCard):
         self.items_layout.setContentsMargins(0, 0, 0, 0)
         self.items_layout.setSpacing(4)
         
-        events = [
-            ("11:45", "SanDisk Ultra USB", "Safe"),
-            ("11:32", "Kingston DT USB", "Medium Risk"),
-            ("11:18", "Samsung SSD T7", "Threat Blocked"),
-            ("11:02", "Logitech MX Keys", "Authorized"),
-            ("10:45", "Generic USB Mouse", "Safe")
-        ]
+        events = []
         
         self.items = []
         for idx, (time_str, name, status) in enumerate(events):
@@ -869,13 +860,9 @@ class QuickSummaryWidget(GlassCard):
         metrics_layout.setSpacing(8)
         metrics_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         
-        metrics = [
-            ("Most Active Device", "SanDisk Ultra USB 3.0"),
-            ("Highest Risk Device", "Kingston USB"),
-            ("Avg Scan Duration", "00:01:42"),
-            ("DB Updates", "Today (Active)"),
-            ("Last Audit Time", "11:45 AM")
-        ]
+        metrics = [("Most Active Device", "UNAVAILABLE"), ("Highest Risk Device", "UNAVAILABLE"),
+                   ("Avg Scan Duration", "UNAVAILABLE"), ("DB Updates", "UNAVAILABLE"),
+                   ("Last Audit Time", "UNAVAILABLE")]
         
         self.labels = []
         for label, val in metrics:

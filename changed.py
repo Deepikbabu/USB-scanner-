@@ -1,9 +1,15 @@
-import pyudev
+try:
+    import pyudev
+except ImportError:  # Linux-only dependency; diagnostics can still import on Windows.
+    pyudev = None
 import os
 import time
 import sqlite3
 import hashlib
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Linux-only file locking helper.
+    fcntl = None
 import struct
 import threading
 import re
@@ -22,8 +28,12 @@ from datetime import datetime
 from pathlib import Path
 import subprocess
 import sys
-import tty
-import termios
+try:
+    import tty
+    import termios
+except ImportError:  # Linux-only terminal helpers are unavailable on Windows.
+    tty = None
+    termios = None
 import queue
 import select
 
@@ -35,9 +45,14 @@ except ImportError:
 from db_init import DB_NAME, ensure_database
 from backend.scanner.yara_engine import load_rules as load_yara_rules
 from backend.scanner.yara_engine import scan_bytes as yara_scan_bytes
+from backend.scanner import hid_policy
+from backend.scanner import storage_policy
+from backend.scanner import quarantine as quarantine_policy
+from backend.reports.incident import normalize_verdict as normalize_incident_verdict
+from backend.reports.evidence import build_evidence
 from backend.security.intelligence import (
     NVDClient, SignedTrustStore, hardware_fingerprint, interface_fingerprint,
-    device_identity_fingerprint, incident_verdict, risk_breakdown,
+    device_identity_fingerprint, identity_quality, incident_verdict, risk_breakdown,
 )
 from backend.notifications import (
     queue_incident_email, queue_operational_email, start_email_worker,
@@ -510,8 +525,8 @@ def restore_from_quarantine(index):
         return False
 
     stored_hash = entry.get("sha256")
-    current_hash = calculate_sha256(quarantined_file)
-    if not stored_hash or current_hash != stored_hash:
+    current_hash = quarantine_policy.sha256_file(quarantined_file)
+    if not quarantine_policy.integrity_matches(quarantined_file, stored_hash):
         print(Colors.RED + "[!] Restore blocked: quarantine integrity hash mismatch." + Colors.END)
         return False
     print("[*] Rescanning quarantined content with current security engines...")
@@ -861,15 +876,37 @@ def notify_incident(usb_info, verdict, json_path, pdf_path):
     verdict = normalize_verdict(verdict)
     """Queue post-report email without allowing notification errors to affect scanning."""
     incident_id = usb_info.get("incident_id") or f"{usb_info.get('vid','unknown')}-{usb_info.get('pid','unknown')}"
-    publish_event("report_ready", {"verdict": verdict, "json_path": json_path,
-                                   "pdf_path": pdf_path, "device": usb_info}, incident_id)
+    report_data = {}
+    if json_path:
+        try:
+            with open(json_path, encoding="utf-8") as stream:
+                report_data = json.load(stream)
+        except (OSError, json.JSONDecodeError):
+            report_data = {}
+    evidence = build_evidence(
+        incident_id=incident_id, device=usb_info, verdict=verdict,
+        risk_breakdown=report_data.get("risk_breakdown", {}),
+        findings=report_data.get("flags", report_data.get("findings", [])),
+        scan_coverage=report_data.get("scan_coverage", {}),
+        fingerprints=report_data.get("fingerprint_comparison", {}),
+        quarantine=report_data.get("quarantine_paths", []),
+        timing=report_data.get("timing", {}),
+        recommendations=report_data.get("recommendations", []),
+    )
+    publish_event("report_ready", {
+        "incident_id": incident_id, "verdict": verdict, "json_path": json_path,
+        "pdf_path": pdf_path, "device": usb_info,
+        **evidence,
+    }, incident_id)
     try:
         queue_incident_email(incident_id, verdict, json_path, pdf_path)
     except Exception as exc:
         print(Colors.YELLOW + f"[EMAIL] Could not queue incident notification: {exc}" + Colors.END)
     finally:
-        publish_event("incident_completed", {"verdict": verdict, "json_path": json_path,
-                                              "pdf_path": pdf_path}, incident_id)
+        publish_event("incident_completed", {
+            "incident_id": incident_id, "verdict": verdict, "json_path": json_path,
+            "pdf_path": pdf_path, "risk_breakdown": report_data.get("risk_breakdown", {}),
+        }, incident_id)
 
 
 def alert_threat_detected(device_model, threat_count=0):
@@ -980,6 +1017,17 @@ def extract_strings(data: bytes, min_len: int = 6) -> list:
     ascii_re = re.compile(rb"[\x20-\x7e]{%d,}" % min_len)
     return [s.decode("ascii", errors="ignore") for s in ascii_re.findall(data)]
 
+
+def read_analysis_sample(file_path: str, limit: int = 8 * 1024 * 1024) -> bytes:
+    """Read a bounded head/tail sample instead of loading large files wholly."""
+    size = os.path.getsize(file_path)
+    with open(file_path, "rb") as stream:
+        head = stream.read(limit)
+        if size > limit * 2:
+            stream.seek(max(0, size - limit))
+            return head + stream.read(limit)
+        return head + stream.read(limit)
+
 def static_analyze(file_path: str) -> list:
     '''
     Perform deep static analysis without execution.
@@ -988,10 +1036,10 @@ def static_analyze(file_path: str) -> list:
     findings = []
     try:
         file_size = os.path.getsize(file_path)
-        # 3. Skip very large files (>100MB) to prevent freezing
+        # 3. Analyze a bounded sample of very large files without allocating
+        # their complete contents in memory.
         if file_size > 100 * 1024 * 1024:
-            findings.append({"issue": "File too large (>100MB)", "risk": 1})
-            return findings
+            findings.append({"issue": "Large file analyzed using bounded sample (>100MB)", "risk": 1})
             
         # Extension-based Type
         ext = os.path.splitext(file_path)[1].lower()
@@ -999,7 +1047,7 @@ def static_analyze(file_path: str) -> list:
         with open(file_path, 'rb') as f:
             head = f.read(4)
             f.seek(0)
-            data = f.read()
+            data = read_analysis_sample(file_path)
 
         yara_findings = yara_scan_bytes(data, os.path.basename(file_path))
         for finding in yara_findings:
@@ -1277,6 +1325,8 @@ def quarantine_mount_path(device_node):
 
 def verify_isolation_mount(mount_path):
     """Verify the kernel mount options before exposing files to the scanner."""
+    return storage_policy.verify_mount_options(mount_path)
+    """Legacy inline implementation retained below for compatibility."""
     try:
         result = subprocess.run(
             ["findmnt", "-n", "-o", "OPTIONS", "--target", mount_path],
@@ -1500,6 +1550,9 @@ def scan_file_task(path, cancel_event=None):
     if cancel_event and cancel_event.is_set():
         raise DeviceRemovedDuringAnalysis("DEVICE REMOVED DURING ANALYSIS")
     findings.extend(clamav_scan_file(path))
+
+    if cancel_event and cancel_event.is_set():
+        raise DeviceRemovedDuringAnalysis("DEVICE REMOVED DURING ANALYSIS")
             
     try:
         sa_findings = static_analyze(path)
@@ -1507,6 +1560,9 @@ def scan_file_task(path, cancel_event=None):
             findings.extend(sa_findings)
     except Exception as e:
         findings.append({"issue": f"Analysis error: {str(e)}", "risk": 0})
+
+    if cancel_event and cancel_event.is_set():
+        raise DeviceRemovedDuringAnalysis("DEVICE REMOVED DURING ANALYSIS")
         
     return path, findings, sha
 
@@ -1544,6 +1600,8 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
     file_hash_materials = []
     file_hashes = []
     cached_files = 0
+    timed_out_files = 0
+    failed_files = 0
     folder_count = 0
     previous_hashes = {
         item.get("relative_path"): item.get("sha256")
@@ -1570,7 +1628,8 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
     processed = 0
     
     # 9. Performance Optimization: ThreadPoolExecutor
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+    try:
         future_to_path = {}
         for path in all_files:
             relative = os.path.relpath(path, mount_path)
@@ -1601,9 +1660,11 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
                 if reused_cache:
                     cached_files += 1
             except concurrent.futures.TimeoutError:
+                timed_out_files += 1
                 findings = [{"issue": "File scanning timed out (>3s limit); scan is incomplete", "risk": 5}]
                 sha = None
             except Exception as e:
+                failed_files += 1
                 findings = [{"issue": f"File scan failed; scan is incomplete: {e}", "risk": 5}]
                 sha = None
             
@@ -1654,6 +1715,11 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
                     lf.write(json.dumps(log_entry) + "\n")
             except Exception:
                 pass
+    finally:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            executor.shutdown(wait=False)
 
     print(" " * 80, end="\r")
     storage_fingerprint = None
@@ -1688,6 +1754,9 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
         coverage["cached_files"] += cached_files
         coverage["fully_scanned_files"] += max(0, total_files - cached_files)
         coverage["cache_reuse_allowed"] = cache_valid
+        coverage["timed_out_files"] = coverage.get("timed_out_files", 0) + timed_out_files
+        coverage["failed_files"] = coverage.get("failed_files", 0) + failed_files
+        coverage["incomplete"] = bool(coverage["timed_out_files"] or coverage["failed_files"])
     return master_risk_score, malware_detected, malicious_files, storage_fingerprint, file_hashes
 
 # ==========================================
@@ -2252,8 +2321,7 @@ VALID_VERDICTS = {"CLEAN", "TRUSTED", "SUSPICIOUS", "DANGEROUS", "INCOMPLETE"}
 
 def normalize_verdict(value):
     """Keep reports, notifications, and dashboard state on one verdict set."""
-    value = str(value or "").upper().strip()
-    return value if value in VALID_VERDICTS else "INCOMPLETE"
+    return normalize_incident_verdict(value)
 
 
 def blocked_incident_breakdown(session, detected_type):
@@ -2600,6 +2668,7 @@ def handle_usb_device(device):
                         "hardware_fingerprint": current_hardware,
                         "interface_fingerprint": current_interfaces,
                         "identity_fingerprint": current_identity,
+                        "identity_quality": identity_quality(usb_info, guard["interfaces"]),
                         "enrolled_at": datetime.now().isoformat(),
                     })
                     trust_status = "legacy whitelist migrated to signed fingerprint"
@@ -3575,6 +3644,9 @@ def authorize_usb_device(usb_port):
     Requires the udev default-deny rule to be active.
     """
     if not usb_port: return False
+    if hid_policy.authorize_sysfs(str(usb_port), True):
+        print(Colors.GREEN + f"  [OK] Authorized USB port {usb_port} for use." + Colors.END)
+        return True
     try:
         auth_path = f"/sys/bus/usb/devices/{usb_port}/authorized"
         if os.path.exists(auth_path):
@@ -3593,6 +3665,10 @@ def deauthorize_usb_device(usb_port, quiet=False):
     """Deny a USB device after an unsafe verdict, when sysfs authorization is available."""
     if not usb_port:
         return False
+    if hid_policy.authorize_sysfs(str(usb_port), False):
+        if not quiet:
+            print(Colors.RED + f"  [OK] Deauthorized USB port {usb_port}; device blocked." + Colors.END)
+        return True
     try:
         auth_path = f"/sys/bus/usb/devices/{usb_port}/authorized"
         if os.path.exists(auth_path):

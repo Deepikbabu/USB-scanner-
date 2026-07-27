@@ -12,6 +12,13 @@ def incident_message(incident_id: str, verdict: str, json_report: str | None) ->
         except (OSError, json.JSONDecodeError):
             pass
     device = payload.get("device", {})
+    report_incident = payload.get("device", {}).get("incident_id") or payload.get("incident_id")
+    if report_incident and str(report_incident) != str(incident_id):
+        raise ValueError("incident ID does not match finalized JSON report")
+    report_verdict = str(payload.get("verdict", verdict)).upper()
+    if report_verdict not in {"CLEAN", "TRUSTED", "SUSPICIOUS", "DANGEROUS", "INCOMPLETE"}:
+        report_verdict = "INCOMPLETE"
+    verdict = report_verdict
     risk = payload.get("risk_breakdown", {})
     findings = payload.get("flags") or payload.get("findings") or []
     subject_prefix = "CRITICAL" if verdict == "DANGEROUS" else "WARNING"

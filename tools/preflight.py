@@ -20,6 +20,17 @@ def check(name: str, ready: bool, detail: str = "") -> bool:
 def main() -> int:
     results = []
     results.append(check("Linux", sys.platform.startswith("linux")))
+    writable_paths = [
+        ("Project reports", ROOT / "reports"),
+        ("Quarantine", ROOT / "quarantine"),
+        ("IPC runtime", Path("/run/usb-scanner")),
+    ]
+    for label, path in writable_paths:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            results.append(check(label, os.access(path, os.W_OK), str(path)))
+        except OSError as exc:
+            results.append(check(label, False, f"{path}: {exc}"))
     results.append(check("udev", Path("/sys/bus/usb").exists() and Path("/proc/mounts").exists()))
     results.append(check("Mount tools", bool(shutil.which("mount") and shutil.which("umount"))))
     usbguard = shutil.which("usbguard")
@@ -61,7 +72,12 @@ def main() -> int:
     try:
         from backend.security.intelligence import NVDClient, SignedTrustStore
         trust = SignedTrustStore()
+        migrated = trust.migrate_legacy()
+        if migrated:
+            print(f"Trust migration     READY - upgraded {migrated} legacy record(s)")
         results.append(check("Signed trust", trust.key_path.exists(), str(trust.directory)))
+        results.append(check("Trust permissions", trust.key_path.stat().st_mode & 0o077 == 0,
+                             "trust key must not be group/world accessible"))
         nvd = NVDClient()
         print(f"NVD enrichment     READY - {'API key configured' if nvd.api_key else 'anonymous/cached mode'}")
     except Exception as exc:

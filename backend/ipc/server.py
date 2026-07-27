@@ -8,6 +8,8 @@ import sqlite3
 import threading
 import time
 import uuid
+import subprocess
+import sys
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -145,6 +147,37 @@ class IPCServer:
                     "status": "accepted" if accepted else "rejected"}
         elif command == "ping":
             data = {"status": "ONLINE", "time": time.time()}
+        elif command == "recover_hid":
+            # Recovery is delegated to the signed-fingerprint verifier. The
+            # dashboard cannot directly authorize arbitrary USB devices.
+            project_root = Path(__file__).resolve().parents[2]
+            script = project_root / "tools" / "hid_trust.py"
+            try:
+                result = subprocess.run(
+                    [os.environ.get("PYTHON", sys.executable), str(script), "recover"],
+                    cwd=project_root, capture_output=True, text=True, timeout=30,
+                )
+                data = {"ok": result.returncode == 0,
+                        "output": (result.stdout or result.stderr).strip()}
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                data = {"ok": False, "output": str(exc)}
+        elif command in {"list_quarantine", "restore_quarantine", "delete_quarantine"}:
+            project_root = Path(__file__).resolve().parents[2]
+            script = project_root / "tools" / "quarantine_api.py"
+            values = request.get("data") or {}
+            action = command.replace("_quarantine", "")
+            args = [sys.executable, str(script), action]
+            if values.get("index") is not None:
+                args.extend(["--index", str(values["index"])])
+            if values.get("confirm"):
+                args.append("--confirm")
+            try:
+                result = subprocess.run(args, cwd=project_root, capture_output=True,
+                                        text=True, timeout=90)
+                data = {"ok": result.returncode == 0, "action": action,
+                        "output": (result.stdout or result.stderr).strip()}
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                data = {"ok": False, "output": str(exc)}
         else:
             return {"protocol": 1, "request_id": request_id, "status": "error",
                     "error": "unknown command"}

@@ -112,7 +112,8 @@ class VectorIconWidget(QWidget):
             painter.setBrush(QBrush(self.color))
             painter.drawEllipse(QRectF(cx - 1.5, cy - 1.5, 3.0, 3.0))
 
-SIMULATED_DEVICES = [
+SIMULATED_DEVICES = []  # Real devices arrive exclusively from the backend.
+'''LEGACY_SAMPLE_DEVICES = [
     {
         "name": "SanDisk Ultra USB 3.0",
         "manufacturer": "SanDisk",
@@ -263,7 +264,7 @@ SIMULATED_DEVICES = [
         "classification": "USB Keyboard",
         "is_bad": True
     },
-]
+]'''
 
 class GlassOverlayPopup(QWidget):
     authorized = pyqtSignal(bool, dict)
@@ -416,15 +417,7 @@ class NewDeviceFoundPopup(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 160))
 
-TRUSTED_DEVICES = [
-    "SanDisk Ultra USB 3.0",
-    "Kingston DataTraveler",
-    "Samsung T7 SSD",
-    "Samsung T7 Portable SSD",
-    "Logitech USB Keyboard",
-    "Dell USB Mouse",
-    "Dell Premium USB Mouse"
-]
+TRUSTED_DEVICES = []  # Trust is supplied by backend fingerprint state.
 
 def check_device_type_match(selected, actual):
     selected_clean = selected.lower().replace("adapter", "device").strip()
@@ -1170,39 +1163,15 @@ class DeviceInfoCard(GlassCard):
         self.fields["usb_type"].setText(dev.get("classification", dev.get("category", "Mass Storage")))
         
         is_bad = dev.get("is_bad", False)
-        if "SanDisk" in dev.get("name", ""):
-            enc_val = "Encrypted (BitLocker)"
-        elif "Sony" in dev.get("name", ""):
-            enc_val = "Encrypted (FileVault)"
-        elif is_bad:
-            enc_val = "Suspicious (None)"
-        else:
-            enc_val = "No"
-        self.fields["encryption"].setText(enc_val)
+        self.fields["encryption"].setText(str(dev.get("encryption", "UNKNOWN")))
         
-        usb_ver = dev.get("usb_version", "USB 2.0")
-        if "3." in usb_ver:
-            p_val = "900 mA"
-        elif "C" in usb_ver:
-            p_val = "900 mA"
-        else:
-            p_val = "500 mA"
-        self.fields["power"].setText(p_val)
+        usb_ver = dev.get("usb_version", "UNKNOWN")
+        self.fields["power"].setText(str(dev.get("power", "UNKNOWN")))
         
         self.fields["usb_version"].setText(usb_ver)
         
-        speed_map = {
-            "USB 2.0": "480 Mbps",
-            "USB 3.0": "5 Gbps",
-            "USB 3.1": "10 Gbps",
-            "USB 3.2": "20 Gbps",
-            "USB-C": "10 Gbps"
-        }
-        speed_str = speed_map.get(usb_ver, "480 Mbps")
-        port_str = "USB-C Port 2" if "C" in usb_ver else "USB 3.0 Port 2"
-        
-        self.fields["port"].setText(f"{port_str} ({speed_str})")
-        self.fields["speed"].setText(speed_str)
+        self.fields["port"].setText(str(dev.get("port", "UNKNOWN")))
+        self.fields["speed"].setText(str(dev.get("speed", "UNKNOWN")))
         self.fields["capacity"].setText(dev.get("capacity", "N/A"))
         self.fields["used_space"].setText(dev.get("used_space", "N/A"))
         self.fields["free_space"].setText(dev.get("free_space", "N/A"))
@@ -1210,14 +1179,7 @@ class DeviceInfoCard(GlassCard):
         self.fields["conn_time"].setText(conn_time)
         self.fields["timer"].setText("00:00:00")
         
-        import hashlib
-        vid = dev.get("vid", "0000")
-        pid = dev.get("pid", "0000")
-        serial = dev.get("serial", "UNKNOWN")
-        raw_str = f"{vid}:{pid}:{serial}"
-        h = hashlib.sha256(raw_str.encode('utf-8')).hexdigest().upper()
-        formatted_fp = ":".join(h[i:i+2] for i in range(0, 16, 2))
-        self.fp_panel.set_fingerprint(formatted_fp)
+        self.fp_panel.set_fingerprint(str(dev.get("fingerprint", "UNKNOWN")))
         
     def update_theme_styles(self):
         self.lbl_title.setStyleSheet(f"color: {theme_manager.get_color('text_secondary')}; font-size: 10px; font-weight: 800; font-family: 'Inter'; letter-spacing: 0.8px;")
@@ -2256,11 +2218,11 @@ class ScanHistoryOverviewCard(GlassCard):
         
         self.stat_rows = []
         
-        self.row_last_scan = CompactStatRow("⏱", "Last Scan", "Today 11:32 AM", self)
+        self.row_last_scan = CompactStatRow("⏱", "Last Scan", "UNAVAILABLE", self)
         layout.addWidget(self.row_last_scan)
         self.stat_rows.append(self.row_last_scan)
         
-        self.row_recent_risk = CompactStatRow("☣", "Recent Risk", "24%", self)
+        self.row_recent_risk = CompactStatRow("☣", "Recent Risk", "UNAVAILABLE", self)
         layout.addWidget(self.row_recent_risk)
         self.stat_rows.append(self.row_recent_risk)
         
@@ -2270,7 +2232,7 @@ class ScanHistoryOverviewCard(GlassCard):
         
         self.status_container = QHBoxLayout()
         self.status_container.setContentsMargins(0, 2, 0, 0)
-        self.status_chip = CompactStatusChip("● Recent Scan Clean", "#D97F4A", self)
+        self.status_chip = CompactStatusChip("● NO RECENT SCAN", "#808080", self)
         self.status_container.addWidget(self.status_chip)
         self.status_container.addStretch()
         layout.addLayout(self.status_container)

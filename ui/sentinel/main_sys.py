@@ -117,12 +117,33 @@ class MainWindow(QMainWindow):
         self._shown_actions = set()
         self._active_incident = None
         self.backend = BackendClient(parent=self)
+        self.page_settings.recover_hid_requested.connect(self.recover_trusted_hid)
+        self.page_settings.quarantine_restore_requested.connect(self.restore_quarantine)
+        self.page_settings.quarantine_delete_requested.connect(self.delete_quarantine)
         self.backend.connection_changed.connect(self.on_backend_connection)
         self.backend.message_received.connect(self.on_backend_message)
         self.backend.start()
         
         self.update_theme_styles()
         theme_manager.theme_changed.connect(self.update_theme_styles)
+
+    def recover_trusted_hid(self):
+        self.page_settings.lbl_hid_recovery.setText("Verifying fingerprints and restoring authorized HID devices…")
+        if not self.backend.recover_hid():
+            self.page_settings.lbl_hid_recovery.setText("Recovery request could not reach the backend.")
+
+    def restore_quarantine(self, index):
+        self.page_settings.lbl_status.setText(f"Restoring quarantine item {index}…")
+        if not self.backend.restore_quarantine(index):
+            self.page_settings.lbl_status.setText("Restore request could not reach the backend.")
+
+    def delete_quarantine(self, index):
+        answer = QMessageBox.question(self, "Confirm deletion", "Permanently delete this quarantined item?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.page_settings.lbl_status.setText(f"Deleting quarantine item {index}…")
+        if not self.backend.delete_quarantine(index):
+            self.page_settings.lbl_status.setText("Delete request could not reach the backend.")
 
     def closeEvent(self, event):
         self.backend.stop()
@@ -145,6 +166,24 @@ class MainWindow(QMainWindow):
             snapshot = message["data"]
             if "recent_events" in snapshot:
                 self.apply_snapshot(snapshot)
+            elif "ok" in snapshot and "output" in snapshot:
+                self.page_settings.lbl_hid_recovery.setText(
+                    str(snapshot.get("output") or "Recovery completed.")
+                )
+                self.page_dashboard.notification_center.add_log(
+                    "HID recovery: " + ("SUCCESS" if snapshot.get("ok") else "FAILED")
+                )
+                self.page_scan.add_log_card(
+                    "HID recovery result: " + str(snapshot.get("output") or "No backend details")
+                )
+                if snapshot.get("action") in {"list", "restore", "delete"}:
+                    self.page_settings.lbl_status.setText(
+                        "Quarantine operation: " + ("SUCCESS" if snapshot.get("ok") else "FAILED")
+                    )
+                    self.backend.command("get_snapshot")
+            elif "action" in snapshot:
+                self.page_settings.lbl_status.setText(str(snapshot.get("output") or "Quarantine operation completed."))
+                self.backend.command("get_snapshot")
             return
         event_id = message.get("event_id")
         if event_id and event_id in self._seen_events:
@@ -182,6 +221,10 @@ class MainWindow(QMainWindow):
             "vid": str(raw.get("vid") or raw.get("vendor_id") or "----"),
             "pid": str(raw.get("pid") or raw.get("product_id") or "----"),
             "serial": str(raw.get("serial") or "Unavailable"),
+            "port": str(raw.get("physical_port") or raw.get("port") or "UNKNOWN"),
+            "fingerprint": str(raw.get("hardware_fingerprint") or raw.get("identity_fingerprint") or "UNKNOWN"),
+            "usbguard_state": str(raw.get("usbguard_state") or "UNKNOWN"),
+            "kernel_authorized": raw.get("kernel_authorized"),
             "usb_version": str(raw.get("usb_version") or "Unknown"),
             "category": raw.get("category") or raw.get("device_type") or raw.get("type") or "USB device",
             "classification": raw.get("classification") or "Unknown",
@@ -204,6 +247,7 @@ class MainWindow(QMainWindow):
             state, detail = data.get("state", "UNKNOWN"), data.get("detail", "")
             self.page_dashboard.apply_backend_state(state, detail)
             self.page_scan.apply_backend_state(state, detail)
+            self.page_dashboard.connected_device.update({"usbguard_state": state, "state_detail": detail}) if self.page_dashboard.connected_device else None
             if str(state).upper() in {"DISCONNECTED", "REMOVED"}:
                 self.page_dashboard.apply_backend_disconnect()
         elif event == "scan_progress":
@@ -218,6 +262,7 @@ class MainWindow(QMainWindow):
             self.page_dashboard.apply_backend_risk(data)
             self.page_scan.apply_backend_risk(data)
         elif event == "report_ready":
+            self.page_scan.apply_backend_storage_status(data)
             self.page_dashboard.apply_backend_report(data)
             self.page_scan.apply_report_quarantine(data)
             self.page_scan.complete_backend_scan(data)
@@ -238,6 +283,7 @@ class MainWindow(QMainWindow):
             self.page_scan.add_log_card(str(data.get("message", "Backend update")))
         elif event == "backend_ready":
             self.page_settings.apply_backend_status(data, {})
+            self.page_scan.apply_backend_engines(data)
             self.page_dashboard.lbl_status.setText("Secure Terminal: Monitoring")
         elif event == "incident_completed":
             self.page_dashboard.apply_backend_report(data)

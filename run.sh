@@ -232,6 +232,7 @@ fi
 
 if [[ "${1:-}" == "--list-hid" || "${1:-}" == "--trust-hid" || \
       "${1:-}" == "--untrust-hid" || "${1:-}" == "--repair-input" || \
+      "${1:-}" == "--recover-hid" || \
       "${1:-}" == "--approve-hid" || "${1:-}" == "--revoke-hid" || \
       "${1:-}" == "--rescan-hid" ]]; then
     install_system_dependencies
@@ -242,6 +243,7 @@ if [[ "${1:-}" == "--list-hid" || "${1:-}" == "--trust-hid" || \
         --trust-hid) action=trust ;;
         --untrust-hid) action=untrust ;;
         --repair-input) action=repair ;;
+        --recover-hid) action=recover ;;
         --approve-hid) action=approve ;;
         --revoke-hid) action=revoke ;;
         --rescan-hid) action=rescan ;;
@@ -250,11 +252,23 @@ if [[ "${1:-}" == "--list-hid" || "${1:-}" == "--trust-hid" || \
     exit $?
 fi
 
+if [[ "${1:-}" == "--rollback-trust" ]]; then
+    setup_python
+    as_root "$ROOT/.venv/bin/python3" "$ROOT/tools/hid_trust.py" rollback
+    exit $?
+fi
+
 if [[ "${1:-}" == "--status" ]]; then
     setup_python
     preflight
     as_root usbguard list-devices
     exit 0
+fi
+
+if [[ "${1:-}" == "--service-status" ]]; then
+    setup_python
+    "$ROOT/.venv/bin/python3" "$ROOT/tools/service_health.py"
+    exit $?
 fi
 
 if [[ "${1:-}" == "--test-yara" ]]; then

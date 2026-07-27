@@ -51,6 +51,19 @@ def device_identity_fingerprint(info: dict[str, Any], interfaces: set[str] | lis
     })
 
 
+def identity_quality(info: dict[str, Any], interfaces: set[str] | list[str]) -> str:
+    """Classify how strongly a device can be distinguished from duplicates."""
+    serial = str(info.get("serial", "")).strip().lower()
+    has_serial = serial not in {"", "unknown", "unavailable", "none"}
+    has_descriptor = bool(str(info.get("usbguard_hash", "")).strip())
+    has_interfaces = bool(list(interfaces))
+    if has_serial and has_descriptor and has_interfaces:
+        return "STRONG"
+    if has_descriptor and has_interfaces:
+        return "MEDIUM"
+    return "WEAK"
+
+
 def manifest_fingerprint(files: list[dict[str, Any]]) -> str:
     stable = [{"relative_path": item["relative_path"], "size": item.get("size", 0),
                "sha256": item.get("sha256")} for item in files]
@@ -58,6 +71,8 @@ def manifest_fingerprint(files: list[dict[str, Any]]) -> str:
 
 
 class SignedTrustStore:
+    SCHEMA_VERSION = 2
+
     def __init__(self) -> None:
         try:
             STATE_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -93,11 +108,58 @@ class SignedTrustStore:
 
     def put(self, identity: str, record: dict[str, Any]) -> None:
         records = self._load_all()
+        if self.records_path.exists():
+            self.backup()
+        record = dict(record)
+        record.setdefault("schema_version", self.SCHEMA_VERSION)
         records[identity] = {"record": record, "signature": self._sign(record)}
         temporary = self.records_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(records, indent=2, default=str) + "\n", encoding="utf-8")
         temporary.replace(self.records_path)
         self.records_path.chmod(0o600)
+
+    def backup(self) -> Path | None:
+        """Create a recoverable trust-record backup before migration/write."""
+        if not self.records_path.exists():
+            return None
+
+    def rollback(self) -> bool:
+        """Restore the last trust-record backup atomically."""
+        backup = self.records_path.with_name("trust_records.json.bak")
+        if not backup.exists():
+            return False
+        try:
+            self.records_path.replace(self.records_path.with_suffix(".pre-rollback"))
+            backup.replace(self.records_path)
+            self.records_path.chmod(0o600)
+            return True
+        except OSError:
+            return False
+        target = self.records_path.with_name("trust_records.json.bak")
+        try:
+            target.write_bytes(self.records_path.read_bytes())
+            target.chmod(0o600)
+            return target
+        except OSError:
+            return None
+
+    def migrate_legacy(self) -> int:
+        """Upgrade unsigned-schema metadata while preserving signatures."""
+        records = self._load_all()
+        changed = 0
+        for wrapped in records.values():
+            record = wrapped.get("record") if isinstance(wrapped, dict) else None
+            if isinstance(record, dict) and "schema_version" not in record:
+                record["schema_version"] = self.SCHEMA_VERSION
+                wrapped["signature"] = self._sign(record)
+                changed += 1
+        if changed:
+            self.backup()
+            temporary = self.records_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(records, indent=2, default=str) + "\n", encoding="utf-8")
+            temporary.replace(self.records_path)
+            self.records_path.chmod(0o600)
+        return changed
 
     def remove(self, identity: str) -> None:
         records = self._load_all()

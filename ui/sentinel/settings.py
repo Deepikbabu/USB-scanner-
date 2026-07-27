@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QButtonGroup, QScrollArea
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QUrl
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QUrl, pyqtSignal
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPainterPath, QDesktopServices
 from theme import theme_manager
 from widgets import GlassCard, StatusBadge
@@ -254,6 +254,13 @@ class InfoRow(QFrame):
             
         self.update_style(hovered=False)
         theme_manager.theme_changed.connect(lambda: self.update_style(hovered=self._is_hovered))
+
+    def add_action_button(self, label, callback):
+        button = QPushButton(label)
+        button.setFixedHeight(28)
+        button.clicked.connect(callback)
+        self.layout().addWidget(button)
+        return button
         
     def enterEvent(self, event):
         self._is_hovered = True
@@ -295,6 +302,10 @@ class InfoRow(QFrame):
         self.icon.update()
 
 class SettingsPage(QWidget):
+    recover_hid_requested = pyqtSignal()
+    quarantine_restore_requested = pyqtSignal(int)
+    quarantine_delete_requested = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         
@@ -575,6 +586,19 @@ class SettingsPage(QWidget):
         updates_layout.addWidget(self.btn_check)
         self.btn_check.hide()  # Backend status occupies this card; no fake update check.
         scroll_layout.addWidget(self.card_updates)
+
+        self.card_hid_recovery = GlassCard()
+        recovery_layout = QVBoxLayout(self.card_hid_recovery)
+        recovery_layout.setContentsMargins(24, 20, 24, 20)
+        recovery_title = QLabel("HID RECOVERY")
+        recovery_title.setStyleSheet("font-size: 13px; font-weight: 800;")
+        self.lbl_hid_recovery = QLabel("Only connected HID devices with matching signed fingerprints will be recovered.")
+        self.btn_recover_hid = QPushButton("RECOVER TRUSTED HID")
+        self.btn_recover_hid.clicked.connect(self.recover_hid_requested.emit)
+        recovery_layout.addWidget(recovery_title)
+        recovery_layout.addWidget(self.lbl_hid_recovery)
+        recovery_layout.addWidget(self.btn_recover_hid)
+        scroll_layout.addWidget(self.card_hid_recovery)
         
         self.scroll_area.setWidget(self.scroll_content)
         main_layout.addWidget(self.scroll_area, 1)
@@ -732,7 +756,7 @@ class SettingsPage(QWidget):
         self.quarantine_empty.setVisible(not quarantine)
         if not quarantine:
             self.quarantine_empty.lbl_val.setText("No records")
-        for entry in quarantine[::-1]:
+        for index, entry in enumerate(quarantine[::-1], 1):
             name = entry.get("original_name") or entry.get("original_path") or "Quarantined file"
             reason = entry.get("reason") or "Security engine detection"
             timestamp = str(entry.get("timestamp", "Unknown time")).replace("T", " ")[:19]
@@ -745,6 +769,8 @@ class SettingsPage(QWidget):
                 f"Vault: {entry.get('quarantine_path', 'Unknown')}\n"
                 f"SHA-256: {entry.get('sha256', 'Unknown')}"
             )
+            row.add_action_button("RESTORE", lambda checked=False, i=index: self.quarantine_restore_requested.emit(i))
+            row.add_action_button("DELETE", lambda checked=False, i=index: self.quarantine_delete_requested.emit(i))
             self.quarantine_layout.addWidget(row)
             self.quarantine_dynamic.append(row)
 

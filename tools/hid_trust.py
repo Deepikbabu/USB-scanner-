@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from backend.security.intelligence import (SignedTrustStore, device_identity_fingerprint,
+                                            identity_quality,
                                             hardware_fingerprint, interface_fingerprint)
 WHITELIST = ROOT / "whitelist.json"
 
@@ -139,6 +140,7 @@ def trust() -> int:
         "hardware_fingerprint": hardware_fingerprint(info, item["interfaces"]),
         "interface_fingerprint": interface_fingerprint(item["interfaces"]),
         "identity_fingerprint": device_identity_fingerprint(info, item["interfaces"]),
+        "identity_quality": identity_quality(info, item["interfaces"]),
         "enrolled_at": __import__("datetime").datetime.now().isoformat(),
     })
     print(f"[OK] Trusted HID saved: {item['vid_pid']} {item['name']}")
@@ -254,6 +256,16 @@ def rescan() -> int:
     return 0
 
 
+def rollback() -> int:
+    confirmation = input("Type ROLLBACK to restore the previous trust records: ").strip()
+    if confirmation != "ROLLBACK":
+        print("Cancelled; trust records were not changed.")
+        return 1
+    ok = SignedTrustStore().rollback()
+    print("[OK] Trust records rolled back." if ok else "[ERROR] No usable trust backup found.")
+    return 0 if ok else 1
+
+
 def main() -> int:
     if os.geteuid() != 0:
         print("Run this command with sudo.", file=sys.stderr)
@@ -261,9 +273,10 @@ def main() -> int:
     action = sys.argv[1] if len(sys.argv) > 1 else "list"
     actions = {"list": list_hid, "trust": trust, "approve": trust,
                "untrust": untrust, "revoke": untrust,
-               "repair": repair, "rescan": rescan}
+               "repair": repair, "recover": repair, "rescan": rescan,
+               "rollback": rollback}
     if action not in actions:
-        print("Usage: hid_trust.py [list|approve|revoke|rescan|repair]", file=sys.stderr)
+        print("Usage: hid_trust.py [list|approve|revoke|rescan|repair|recover|rollback]", file=sys.stderr)
         return 2
     return actions[action]()
 
