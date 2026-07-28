@@ -88,6 +88,9 @@ class MainWindow(QMainWindow):
         self.pages_stack = QStackedWidget()
         
         self.page_dashboard = DashboardPage()
+        # Dashboard construction is lazy so validation can run before the
+        # backend connects; build its widgets before accessing status labels.
+        self.page_dashboard.apply_backend_incidents([])
         self.page_scan = ScanPage()
         self.page_history = HistoryPage()
         self.page_settings = SettingsPage()
