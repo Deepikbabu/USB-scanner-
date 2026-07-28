@@ -12,6 +12,7 @@ from history import HistoryPage
 from settings import SettingsPage
 from backend_client import BackendClient
 from asset_pages import DevicesPage, QuarantinePage, DeviceDetailsPage
+from shell import ApplicationShell
 
 class PremiumBackgroundWidget(QWidget):
     def __init__(self, parent=None):
@@ -73,16 +74,9 @@ class PremiumBackgroundWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("USB Security Detector && Terminal Sandbox")
-        self.resize(800, 600)
-        
-        # Central Widget & Main Layout
-        self.central_widget = PremiumBackgroundWidget()
-        self.setCentralWidget(self.central_widget)
-        
-        self.main_layout = QVBoxLayout(self.central_widget)
-        self.main_layout.setContentsMargins(16, 16, 16, 16)
-        self.main_layout.setSpacing(16)
+        self.setWindowTitle("USB Security Scanner")
+        self.resize(1440, 900)
+        self.setMinimumSize(1024, 680)
         
         # Pages Stack
         self.pages_stack = QStackedWidget()
@@ -106,18 +100,11 @@ class MainWindow(QMainWindow):
         self.pages_stack.addWidget(self.page_device_details)
         self.pages_stack.addWidget(self.page_settings)
         
-        # Bottom Navigation
-        self.nav_bar = BottomNavigationBar()
-        
-        # Center the navigation bar inside a layout with flexible spacers
-        self.nav_container_layout = QHBoxLayout()
-        self.nav_container_layout.setContentsMargins(0, 0, 0, 0)
-        self.nav_container_layout.addStretch(1)
-        self.nav_container_layout.addWidget(self.nav_bar)
-        self.nav_container_layout.addStretch(1)
-        
-        self.main_layout.addWidget(self.pages_stack, 1)
-        self.main_layout.addLayout(self.nav_container_layout)
+        # One persistent shell owns navigation and page chrome.
+        self.shell = ApplicationShell(self.pages_stack)
+        self.central_widget = self.shell
+        self.setCentralWidget(self.shell)
+        self.nav_bar = self.shell.navigation
         
         # Connect navigation switching with transition animation
         self.nav_bar.tab_changed.connect(self.switch_page)
@@ -135,6 +122,7 @@ class MainWindow(QMainWindow):
         self.page_quarantine.restore_requested.connect(self.restore_quarantine)
         self.page_quarantine.delete_requested.connect(self.delete_quarantine)
         self.page_quarantine.details_requested.connect(self.show_quarantine_details)
+        self.page_devices.device_selected.connect(self.show_device_details)
         self.backend.connection_changed.connect(self.on_backend_connection)
         self.backend.message_received.connect(self.on_backend_message)
         self.backend.start()
@@ -148,6 +136,15 @@ class MainWindow(QMainWindow):
             self.page_settings.lbl_hid_recovery.setText("Recovery request could not reach the backend.")
 
     def restore_quarantine(self, index):
+        answer = QMessageBox.question(
+            self,
+            "Confirm restoration",
+            "Restore this item?\n\nThe backend will verify its stored hash and "
+            "rescan it with the current engines. Unsafe or modified files will "
+            "remain isolated.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         self.page_settings.lbl_status.setText(f"Restoring quarantine item {index}…")
         if not self.backend.restore_quarantine(index):
             self.page_settings.lbl_status.setText("Restore request could not reach the backend.")
@@ -161,15 +158,30 @@ class MainWindow(QMainWindow):
             self.page_settings.lbl_status.setText("Delete request could not reach the backend.")
 
     def show_quarantine_details(self, index):
-        item = self.page_quarantine.table.item(index, 0)
-        name = item.text() if item else "Unknown item"
-        QMessageBox.information(self, "Quarantine details", f"File: {name}\nIntegrity and threat details are available in the final report.")
+        item = next(
+            (entry for entry in self.page_quarantine._items
+             if int(entry.get("backend_index", -1)) == int(index)), None
+        )
+        if not item:
+            QMessageBox.warning(self, "Quarantine details", "The selected vault item is no longer available.")
+            return
+        QMessageBox.information(
+            self, "Quarantine details",
+            f"File: {item['name']}\nReason: {item['reason']}\n"
+            f"Original path: {item['original_path']}\nSHA-256: {item['sha256']}\n"
+            f"Integrity: {'Verified' if item['verified'] else 'Needs attention'}",
+        )
+
+    def show_device_details(self, device):
+        self.page_device_details.apply_backend_device(device)
+        self.nav_bar.set_active_tab(5)
 
     def closeEvent(self, event):
         self.backend.stop()
         super().closeEvent(event)
 
     def on_backend_connection(self, connected, detail):
+        self.shell.set_backend_connected(connected)
         if connected:
             self.page_dashboard.btn_retry.hide()
             self.page_dashboard.lbl_subtitle.setText("Security engine online — live event stream")
@@ -241,11 +253,47 @@ class MainWindow(QMainWindow):
             self.on_backend_message(event)
         for action in snapshot.get("pending_actions", []):
             self.apply_event({"event": "user_action_required", "data": dict(action)})
+        # Reconstruct an in-flight scan even when its early events have rolled
+        # out of the bounded recent-event buffer.
+        for active in snapshot.get("active_incidents", []):
+            active_data = dict(active.get("data") or {})
+            active_id = active.get("incident_id") or active_data.get("incident_id")
+            if self.page_dashboard.connected_device is None and active_data.get("name"):
+                self.apply_event({
+                    "event": "device_detected", "incident_id": active_id,
+                    "data": active_data,
+                })
+            if "state" in active_data:
+                self.apply_event({
+                    "event": "device_state", "incident_id": active_id,
+                    "data": {"state": active_data.get("state"),
+                             "detail": active_data.get("detail", "")},
+                })
+            if "progress" in active_data:
+                self.apply_event({
+                    "event": "scan_progress", "incident_id": active_id,
+                    "data": active_data,
+                })
+            if "total" in active_data:
+                self.apply_event({
+                    "event": "risk_updated", "incident_id": active_id,
+                    "data": active_data,
+                })
         incidents = snapshot.get("incidents", [])
         if hasattr(self.page_dashboard, "apply_backend_incidents"):
             self.page_dashboard.apply_backend_incidents(incidents)
+        if hasattr(self.page_dashboard, "apply_backend_resources"):
+            self.page_dashboard.apply_backend_resources(snapshot.get("resources", {}))
         if hasattr(self.page_history, "apply_backend_incidents"):
             self.page_history.apply_backend_incidents(incidents)
+        if hasattr(self.page_history, "apply_backend_resources"):
+            self.page_history.apply_backend_resources(snapshot.get("resources", {}))
+        if hasattr(self.page_devices, "apply_backend_incidents"):
+            self.page_devices.apply_backend_incidents(incidents)
+        if hasattr(self.page_devices, "apply_backend_resources"):
+            self.page_devices.apply_backend_resources(snapshot.get("resources", {}))
+        if hasattr(self.page_quarantine, "apply_backend_resources"):
+            self.page_quarantine.apply_backend_resources(snapshot.get("resources", {}))
         if hasattr(self.page_settings, "apply_backend_status"):
             self.page_settings.apply_backend_status(
                 snapshot.get("system_status", {}), snapshot.get("resources", {})
@@ -288,9 +336,15 @@ class MainWindow(QMainWindow):
             state, detail = data.get("state", "UNKNOWN"), data.get("detail", "")
             self.page_dashboard.apply_backend_state(state, detail)
             self.page_scan.apply_backend_state(state, detail)
+            self.page_devices.apply_backend_state(state, detail)
             self.page_dashboard.connected_device.update({"usbguard_state": state, "state_detail": detail}) if self.page_dashboard.connected_device else None
+            if self.page_dashboard.connected_device:
+                self.page_device_details.apply_backend_device(
+                    self.page_dashboard.connected_device
+                )
             if str(state).upper() in {"DISCONNECTED", "REMOVED"}:
                 self.page_dashboard.apply_backend_disconnect()
+                self.page_devices.apply_backend_disconnect()
         elif event == "scan_progress":
             self.page_scan.apply_backend_progress(data)
         elif event == "scan_complete":
@@ -319,6 +373,7 @@ class MainWindow(QMainWindow):
             self.page_settings.apply_resource_event(event, data)
             if event == "quarantine_updated":
                 self.page_scan.apply_quarantine_event(data)
+                self.page_quarantine.apply_backend_event(data)
             self.backend.command("get_snapshot")
         elif event == "log":
             self.page_dashboard.notification_center.add_log(str(data.get("message", "Backend update")))
@@ -450,11 +505,14 @@ class MainWindow(QMainWindow):
         self.page_history.add_log_entry(device, timestamp, "BLOCKED")
 
     def update_theme_styles(self):
-        # Trigger repaint on our custom background widget when theme changes
+        app = QApplication.instance()
+        if app is not None:
+            theme_manager.apply(app)
         self.central_widget.update()
 
 def main():
     app = QApplication(sys.argv)
+    theme_manager.apply(app)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

@@ -95,11 +95,28 @@ def main():
     assert "Validation finding" in window.page_scan.threat_card.lbl_malware_name.text()
     assert "DANGEROUS" in window.page_dashboard.lbl_threat_level.text()
     window.apply_event({"event": "report_ready", "incident_id": "validation",
-                        "data": {"verdict": "DANGEROUS", "pdf_path": "/tmp/report.pdf"}})
+                        "data": {"verdict": "DANGEROUS", "pdf_path": "/tmp/report.pdf",
+                                 "quarantine": ["/vault/bad.exe"]}})
     assert window.page_scan.scan_progress == 42
     assert window.page_dashboard.connected_device["name"] == "Validation USB"
     assert "DANGEROUS" in window.page_scan.lbl_status.text()
     assert window.page_dashboard.last_scan_card.fields["status"].text() == "DANGEROUS"
+    # A newly opened dashboard must recover an active scan even if its initial
+    # events have rolled out of the recent-event buffer.
+    window.page_dashboard.apply_backend_disconnect()
+    window.apply_snapshot({
+        "recent_events": [], "pending_actions": [], "incidents": [],
+        "resources": {}, "system_status": {},
+        "active_incidents": [{
+            "incident_id": "active-validation",
+            "data": {"incident_id": "active-validation", "name": "Active USB",
+                     "vid": "1111", "pid": "2222", "state": "SCANNING",
+                     "detail": "classified as storage", "progress": 61,
+                     "message": "Scanning active.bin"},
+        }],
+    })
+    assert window.page_dashboard.connected_device["name"] == "Active USB"
+    assert window.page_scan.scan_progress == 61
     window.apply_event({"event": "log", "data": {"message": "Live backend log"}})
     window.apply_event({"event": "backend_ready", "data": {"Linux": "READY"}})
     window.apply_event({"event": "action_resolved",

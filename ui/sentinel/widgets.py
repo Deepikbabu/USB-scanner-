@@ -1,5 +1,8 @@
 import math
-from PyQt6.QtWidgets import QFrame, QWidget, QHBoxLayout, QLabel, QGraphicsDropShadowEffect
+from PyQt6.QtWidgets import (
+    QFrame, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
+    QTableWidget, QAbstractItemView,
+)
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, QVariantAnimation, QEasingCurve
 from PyQt6.QtGui import QPainter, QPen, QBrush, QFont, QLinearGradient, QPainterPath, QColor
 from theme import theme_manager
@@ -79,12 +82,13 @@ def draw_category_vector_icon(painter, category, x, y, size):
         painter.drawText(QRectF(cx - 15, cy - 15, 30, 30), Qt.AlignmentFlag.AlignCenter, "?")
 
 class GlassCard(QFrame):
+    """Shared application card retained under its legacy public name."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("glassCard")
         self.setFrameShape(QFrame.Shape.NoFrame)
         
-        # Hover animation properties
         self._hover_progress = 0.0
         self.anim = QVariantAnimation(self)
         self.anim.setDuration(250)
@@ -111,97 +115,21 @@ class GlassCard(QFrame):
         super().leaveEvent(event)
 
     def update_style(self):
-        self.setStyleSheet("""
-            QLabel, QPushButton, QWidget {
-                border: none;
-                background-color: transparent;
-            }
-        """)
+        self.setStyleSheet("QFrame#glassCard { background: transparent; border: none; }")
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # Base rectangle with drawing margin (12px) to prevent clipping when lifted/scaled/shadowed
-        margin = 12.0
-        base_rect = QRectF(self.rect())
-        
-        # Compute dynamic lifted and scaled rect
-        lift = 4.0 * self._hover_progress
-        scale = 1.01 * self._hover_progress
-        
-        card_rect = base_rect.adjusted(
-            margin - scale,
-            margin - lift - scale,
-            -margin + scale,
-            -margin - lift + scale
+        card_rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        bg_color = theme_manager.get_qcolor(
+            "surface_hover" if self._hover_progress > 0.5 else "surface"
         )
-        
-        # Draw soft shadow manually
-        # This replaces QGraphicsDropShadowEffect to avoid painter conflicts and boost performance on low-power devices
-        shadow_opacity = int(35 + 25 * self._hover_progress)
-        for offset in range(1, 6):
-            shadow_rect = card_rect.adjusted(-offset * 1.5, -offset * 0.5 + 2.0, offset * 1.5, offset * 1.5 + 3.0)
-            opacity = int((shadow_opacity / 5) * (6 - offset))
-            painter.setBrush(QBrush(QColor(0, 0, 0, opacity)))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(shadow_rect, 24.0 + offset, 24.0 + offset)
-        
-        # Draw background glass (slightly brighter on hover)
-        bg_color = theme_manager.get_qcolor('glass_bg')
-        
-        if self._hover_progress > 0:
-            if theme_manager.current_theme == "dark":
-                bg_color.setRed(min(255, bg_color.red() + int(10 * self._hover_progress)))
-                bg_color.setGreen(min(255, bg_color.green() + int(10 * self._hover_progress)))
-                bg_color.setBlue(min(255, bg_color.blue() + int(10 * self._hover_progress)))
-                bg_color.setAlpha(min(255, bg_color.alpha() + int(10 * self._hover_progress)))
-            else:
-                bg_color.setAlpha(min(255, bg_color.alpha() + int(15 * self._hover_progress)))
-                
         painter.setBrush(QBrush(bg_color))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(card_rect, 24.0, 24.0)
-        
-        # Dynamic glass reflection (moving diagonal white/light-cyan sheen on hover)
-        if self._hover_progress > 0.01:
-            sheen_path = QPainterPath()
-            sheen_path.addRoundedRect(card_rect, 24.0, 24.0)
-            painter.save()
-            painter.setClipPath(sheen_path)
-            
-            # Coordinate sliding based on hover progress
-            start_x = card_rect.left() - card_rect.width() * 0.5 + (card_rect.width() * 1.5 * self._hover_progress)
-            end_x = start_x + card_rect.width() * 0.3
-            
-            sheen_grad = QLinearGradient(QPointF(start_x, card_rect.top()), QPointF(end_x, card_rect.bottom()))
-            sheen_grad.setColorAt(0.0, QColor(255, 255, 255, 0))
-            sheen_grad.setColorAt(0.5, QColor(255, 255, 255, int(25 * self._hover_progress)))
-            sheen_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-            
-            painter.setBrush(QBrush(sheen_grad))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(card_rect)
-            painter.restore()
-            
-        # Draw elegant cybernetic semi-transparent cyan border
-        accent_color_str = theme_manager.get_color("accent")
-        accent = QColor(accent_color_str)
-        
-        # Base glass border
-        glass_border = theme_manager.get_qcolor("glass_border")
-        
-        # Blend base glass border with growing cyan/accent glow on hover
-        border_r = int(glass_border.red() + (accent.red() - glass_border.red()) * 0.4 * self._hover_progress)
-        border_g = int(glass_border.green() + (accent.green() - glass_border.green()) * 0.4 * self._hover_progress)
-        border_b = int(glass_border.blue() + (accent.blue() - glass_border.blue()) * 0.4 * self._hover_progress)
-        border_a = int(glass_border.alpha() + (60 - glass_border.alpha()) * self._hover_progress)
-        
-        pen_color = QColor(border_r, border_g, border_b, border_a)
-        pen = QPen(pen_color, 1.0)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(card_rect, 24.0, 24.0)
+        border = theme_manager.get_qcolor(
+            "accent" if self._hover_progress > 0.75 else "border"
+        )
+        painter.setPen(QPen(border, 1.0))
+        painter.drawRoundedRect(card_rect, 12.0, 12.0)
 
 class GlassProgressBar(QWidget):
     def __init__(self, parent=None):
@@ -246,26 +174,106 @@ class GlassProgressBar(QWidget):
                 painter.drawRoundedRect(fill_rect, 4.0, 4.0)
 
 class StatusBadge(QWidget):
-    def __init__(self, text, color, parent=None):
+    SEMANTIC_COLORS = {
+        "success": "success", "clean": "success", "trusted": "success",
+        "warning": "warning", "suspicious": "warning", "incomplete": "warning",
+        "danger": "danger", "dangerous": "danger", "blocked": "danger",
+        "info": "info", "scanning": "info", "neutral": "text_secondary",
+    }
+
+    def __init__(self, text, color=None, parent=None, tone=None):
         super().__init__(parent)
+        self.setObjectName("statusBadge")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setContentsMargins(9, 3, 9, 3)
         layout.setSpacing(6)
         
         self.dot = QWidget()
         self.dot.setFixedSize(6, 6)
-        self.dot.setStyleSheet(f"background-color: {color}; border-radius: 3px; border: none;")
-        
         self.label = QLabel(text.upper())
-        self.label.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: 800; font-family: 'Inter'; letter-spacing: 0.8px; border: none; background: transparent;")
-        
         layout.addWidget(self.dot)
         layout.addWidget(self.label)
+        self.update_badge(text, color=color, tone=tone)
 
-    def update_badge(self, text, color):
+    def update_badge(self, text, color=None, tone=None):
+        key = tone or str(text).lower()
+        token = self.SEMANTIC_COLORS.get(key, "text_secondary")
+        color = color or theme_manager.get_color(token)
         self.dot.setStyleSheet(f"background-color: {color}; border-radius: 3px; border: none;")
         self.label.setText(text.upper())
-        self.label.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: 800; font-family: 'Inter'; letter-spacing: 0.8px; border: none; background: transparent;")
+        self.setStyleSheet(
+            f"QWidget#statusBadge {{ background: {theme_manager.get_color('surface_raised')};"
+            f" border: 1px solid {theme_manager.get_color('border')}; border-radius: 10px; }}"
+            f" QLabel {{ color: {color}; font-size: 9px; font-weight: 800;"
+            " letter-spacing: 0.6px; border: none; background: transparent; }}"
+        )
+
+
+class AppButton(QPushButton):
+    """Button with a consistent semantic variant."""
+
+    def __init__(self, text="", variant="secondary", parent=None):
+        super().__init__(text, parent)
+        self.setProperty("variant", variant)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+
+class AppTableWidget(QTableWidget):
+    """Standard table behavior shared by all data-heavy pages."""
+
+    def __init__(self, rows=0, columns=0, parent=None):
+        super().__init__(rows, columns, parent)
+        self.setAlternatingRowColors(True)
+        self.setShowGrid(False)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.verticalHeader().setVisible(False)
+        self.verticalHeader().setDefaultSectionSize(44)
+        self.horizontalHeader().setStretchLastSection(True)
+
+
+class EmptyState(QFrame):
+    """Reusable honest empty/loading/error state for page content."""
+
+    def __init__(self, title="No data yet", message="", icon="◇", parent=None):
+        super().__init__(parent)
+        self.setObjectName("emptyState")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 28, 24, 28)
+        layout.setSpacing(7)
+        self.icon = QLabel(icon)
+        self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title = QLabel(title)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message = QLabel(message)
+        self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message.setWordWrap(True)
+        layout.addWidget(self.icon)
+        layout.addWidget(self.title)
+        layout.addWidget(self.message)
+        self._apply_theme()
+        theme_manager.theme_changed.connect(self._apply_theme)
+
+    def set_content(self, title, message="", icon=None):
+        self.title.setText(title)
+        self.message.setText(message)
+        if icon is not None:
+            self.icon.setText(icon)
+
+    def _apply_theme(self):
+        c = theme_manager.colors
+        self.setStyleSheet(f"""
+            QFrame#emptyState {{ background: {c['surface']}; border: 1px dashed {c['border']};
+                                border-radius: 10px; }}
+            QFrame#emptyState QLabel {{ background: transparent; border: 0; }}
+        """)
+        self.icon.setStyleSheet(f"color: {c['accent']}; font-size: 28px;")
+        self.title.setStyleSheet(f"color: {c['text_primary']}; font-size: 14px; font-weight: 700;")
+        self.message.setStyleSheet(f"color: {c['text_secondary']}; font-size: 11px;")
+
+
+AppCard = GlassCard
 
 class AnimatedUSBWidget(QWidget):
     def __init__(self, parent=None):
@@ -387,4 +395,3 @@ class CircularRiskRing(QWidget):
         painter.setFont(QFont("Inter", 11, QFont.Weight.Bold))
         text = "100%" if self.threat_active else "0%"
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
-

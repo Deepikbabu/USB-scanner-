@@ -1,4 +1,6 @@
-from .dashboard import DashboardPage, COLORS, GlassCard, StatusBadge
+from .dashboard import DashboardPage
+from .theme import theme_manager
+from .widgets import GlassCard, StatusBadge
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PyQt6.QtCore import Qt
 
@@ -13,13 +15,15 @@ class PlaceholderPage(QWidget):
         cv.setSpacing(20)
         icon_lbl = QLabel("◎")
         icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_lbl.setStyleSheet(f"font-size: 80px; color: {COLORS['accent']}; border: none;")
+        icon_lbl.setStyleSheet(
+            f"font-size: 80px; color: {theme_manager.get_color('accent')}; border: none;"
+        )
         cv.addWidget(icon_lbl)
         title_lbl = QLabel(title)
         title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_lbl.setStyleSheet("color: white; font-size: 24px; font-weight: 900; border: none;")
+        title_lbl.setStyleSheet("font-size: 24px; font-weight: 900; border: none;")
         cv.addWidget(title_lbl)
-        status = StatusBadge("Coming Soon", COLORS['accent'])
+        status = StatusBadge("Coming Soon", tone="info")
         cv.addWidget(status, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addStretch()
         layout.addWidget(card)

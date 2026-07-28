@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import queue
 import socket
@@ -271,7 +272,34 @@ class IPCServer:
         def load(path, default):
             try: return json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError): return default
-        quarantine = load(PROJECT_ROOT / "quarantine" / "quarantine_log.json", [])
+        def safe_int(value):
+            try: return int(value or 0)
+            except (TypeError, ValueError): return 0
+        raw_quarantine = load(PROJECT_ROOT / "quarantine" / "quarantine_log.json", [])
+        quarantine = []
+        for raw_entry in raw_quarantine if isinstance(raw_quarantine, list) else []:
+            entry = dict(raw_entry or {})
+            vault_path = Path(entry.get("quarantine_path") or (
+                PROJECT_ROOT / "quarantine" / str(entry.get("quarantined_name", ""))
+            ))
+            digest = None
+            try:
+                hasher = hashlib.sha256()
+                with vault_path.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        hasher.update(chunk)
+                digest = hasher.hexdigest()
+                entry["size"] = vault_path.stat().st_size
+                entry["execute_disabled"] = (vault_path.stat().st_mode & 0o111) == 0
+            except OSError:
+                entry["size"] = 0
+                entry["execute_disabled"] = False
+            entry["vault_present"] = digest is not None
+            entry["integrity_verified"] = bool(
+                digest and entry.get("sha256") and digest == entry.get("sha256")
+                and entry["execute_disabled"]
+            )
+            quarantine.append(entry)
         hid = load(PROJECT_ROOT / "whitelist.json", {})
         storage = load(PROJECT_ROOT / "storage_whitelist.json", {})
         signed_trust = []
@@ -287,12 +315,37 @@ class IPCServer:
         except Exception:
             pass
         reports = []
-        for path in sorted((PROJECT_ROOT / "reports").glob("incident_*.json"), reverse=True)[:100]:
+        for path in sorted((PROJECT_ROOT / "reports").glob("incident_*.json"), reverse=True):
             payload = load(path, {})
-            reports.append({"incident_id": payload.get("device", {}).get("incident_id", path.stem),
-                            "verdict": payload.get("verdict", payload.get("decision", "UNKNOWN")),
-                            "json_path": str(path), "pdf_path": str(path.with_suffix(".pdf")),
-                            "timestamp": payload.get("timestamp", "")})
+            device = payload.get("device") if isinstance(payload.get("device"), dict) else {}
+            coverage = payload.get("scan_coverage")
+            if not isinstance(coverage, dict):
+                coverage = device.get("scan_coverage", {}) if isinstance(device.get("scan_coverage"), dict) else {}
+            inventory = device.get("file_inventory", {}) if isinstance(device.get("file_inventory"), dict) else {}
+            findings = payload.get("findings", payload.get("flags", []))
+            findings = findings if isinstance(findings, list) else []
+            malicious = payload.get("malicious_files", [])
+            malicious = malicious if isinstance(malicious, list) else []
+            breakdown = payload.get("risk_breakdown", {})
+            breakdown = breakdown if isinstance(breakdown, dict) else {}
+            report_id = payload.get("incident_id") or device.get("incident_id") or path.stem
+            verdict = str(payload.get("verdict", payload.get("decision", "INCOMPLETE"))).upper()
+            pdf_path = path.with_suffix(".pdf")
+            threat_count = len(malicious)
+            if not malicious and verdict in {"SUSPICIOUS", "DANGEROUS", "INCOMPLETE"}:
+                threat_count = len(findings)
+            reports.append({
+                "incident_id": report_id,
+                "verdict": verdict,
+                "json_path": str(path),
+                "pdf_path": str(pdf_path) if pdf_path.exists() else "",
+                "timestamp": payload.get("timestamp", ""),
+                "device": device,
+                "files": safe_int(inventory.get("files", coverage.get("total_files", 0))),
+                "threats": threat_count,
+                "risk": safe_int(payload.get("total_risk", breakdown.get("total", 0))),
+                "quarantine_count": len(payload.get("quarantine_paths", []) or []),
+            })
         deliveries = []
         email_status = {"enabled": False, "ready": False}
         try:
@@ -309,9 +362,16 @@ class IPCServer:
                               for row in db.execute("SELECT incident_id,verdict,status,attempts,updated,last_error "
                                                     "FROM delivery ORDER BY created DESC LIMIT 100")]
         except sqlite3.Error: pass
+        metrics = {
+            "incidents": len(reports),
+            "files_scanned": sum(report["files"] for report in reports),
+            "threats_found": sum(report["threats"] for report in reports),
+            "quarantined_files": len(quarantine),
+        }
         return {"quarantine": quarantine, "trusted_hid": hid, "trusted_storage": storage,
-                "signed_trust": signed_trust, "reports": reports,
-                "email_deliveries": deliveries, "email_status": email_status}
+                "signed_trust": signed_trust, "reports": reports[:100],
+                "email_deliveries": deliveries, "email_status": email_status,
+                "metrics": metrics}
 
     def history(self, limit=200) -> list[dict[str, Any]]:
         try:

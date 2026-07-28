@@ -1646,6 +1646,7 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
     
     total_files = len(all_files)
     processed = 0
+    scan_started = time.monotonic()
     
     # 9. Performance Optimization: ThreadPoolExecutor
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
@@ -1668,10 +1669,20 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
                 # Reserve the beginning/end of the live gauge for descriptor,
                 # policy, risk and report stages surrounding the file scan.
                 progress = 35 + int((processed / total_files) * 50)
+                elapsed_seconds = max(0.001, time.monotonic() - scan_started)
+                files_per_second = processed / elapsed_seconds
+                remaining_seconds = (
+                    max(0.0, (total_files - processed) / files_per_second)
+                    if files_per_second > 0 else 0.0
+                )
                 emit_ui_event("scan_progress", {
                     "incident_id": (device_info or {}).get("incident_id") if isinstance(device_info, dict) else None,
                     "progress": progress,
                     "message": f"Scanning {os.path.basename(path)}...",
+                    "files": f"{processed:,} / {total_files:,}",
+                    "speed": f"{files_per_second:.1f} files/s",
+                    "elapsed": f"{int(elapsed_seconds) // 60:02d}:{int(elapsed_seconds) % 60:02d}",
+                    "remaining": f"{int(remaining_seconds) // 60:02d}:{int(remaining_seconds) % 60:02d}",
                 })
                 
             try:
@@ -4216,6 +4227,7 @@ if __name__ == "__main__":
     readiness = {
         "clamav": _clamav_command() is not None,
         "yara": load_yara_rules() is not None,
+        "hash_database": bool(db_path and os.path.exists(db_path)),
         "root": is_root_user(),
         "usbguard": shutil.which("usbguard") is not None,
     }
