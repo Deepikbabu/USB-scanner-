@@ -2680,6 +2680,10 @@ class DashboardPage(QWidget):
         self.connection_time_elapsed = 0
         self.is_timer_running = False
         
+        # The first call lazily builds the legacy dashboard widgets. Snapshot
+        # refreshes must only update data, never rebuild the layout.
+        if hasattr(self, 'root_layout'):
+            return
         self.root_layout = QStackedLayout(self)
         self.root_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
         
