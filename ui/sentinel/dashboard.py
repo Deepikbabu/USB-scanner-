@@ -2,11 +2,11 @@
 
 from collections import deque
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QLineF
-from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QLineF, QPropertyAnimation, QVariantAnimation, QEasingCurve
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QBrush
 from PyQt6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget, QGraphicsOpacityEffect,
 )
 
 from theme import theme_manager
@@ -32,11 +32,19 @@ class TrendChart(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.values = [0] * 7
+        self.reveal = 1.0
+        self.animation = QVariantAnimation(self)
+        self.animation.setDuration(650)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.animation.valueChanged.connect(self._animate)
         self.setMinimumHeight(175)
 
     def set_values(self, values):
         self.values = list(values[-7:]) or [0]
-        self.update()
+        self.animation.stop(); self.animation.setStartValue(0.0); self.animation.setEndValue(1.0); self.animation.start()
+
+    def _animate(self, value):
+        self.reveal = float(value); self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -53,9 +61,17 @@ class TrendChart(QWidget):
         path = QPainterPath()
         for index, value in enumerate(self.values):
             x = rect.left() + rect.width() * index / (len(self.values) - 1)
-            y = rect.bottom() - (float(value) / high) * rect.height()
+            y = rect.bottom() - (float(value) / high) * rect.height() * self.reveal
             path.moveTo(x, y) if index == 0 else path.lineTo(x, y)
+        fill = QPainterPath(path)
+        fill.lineTo(rect.right(), rect.bottom()); fill.lineTo(rect.left(), rect.bottom()); fill.closeSubpath()
+        gradient = QLinearGradient(0, rect.top(), 0, rect.bottom())
+        accent = theme_manager.get_qcolor("accent"); soft = QColor(accent); soft.setAlpha(65)
+        clear = QColor(accent); clear.setAlpha(0)
+        gradient.setColorAt(0, soft); gradient.setColorAt(1, clear)
+        painter.setPen(Qt.PenStyle.NoPen); painter.setBrush(QBrush(gradient)); painter.drawPath(fill)
         painter.setPen(QPen(theme_manager.get_qcolor("accent"), 2.5))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
 
 
@@ -64,6 +80,13 @@ class DeviceVisual(QWidget):
         super().__init__(parent)
         self.category = "USB device"
         self.setFixedSize(72, 72)
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        self.pulse_animation = QPropertyAnimation(self.opacity_effect, b"opacity", self)
+        self.pulse_animation.setDuration(1400); self.pulse_animation.setStartValue(.82)
+        self.pulse_animation.setEndValue(1.0); self.pulse_animation.setLoopCount(-1)
+        self.pulse_animation.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self.pulse_animation.start()
 
     def set_category(self, category):
         self.category = category or "USB device"
@@ -72,12 +95,21 @@ class DeviceVisual(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(theme_manager.get_qcolor("accent"), 2))
-        painter.setBrush(theme_manager.get_qcolor("accent_soft"))
-        painter.drawRoundedRect(QRectF(12, 9, 48, 54), 10, 10)
-        painter.drawLine(28, 22, 44, 22)
-        painter.drawLine(28, 30, 44, 30)
-        painter.drawLine(28, 38, 40, 38)
+        accent=theme_manager.get_qcolor("accent"); glow=QColor(accent); glow.setAlpha(34)
+        painter.setPen(Qt.PenStyle.NoPen); painter.setBrush(glow); painter.drawEllipse(QRectF(4,4,64,64))
+        painter.setPen(QPen(accent,2,Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap,Qt.PenJoinStyle.RoundJoin)); painter.setBrush(Qt.BrushStyle.NoBrush)
+        category=self.category.casefold()
+        if "keyboard" in category:
+            painter.drawRoundedRect(QRectF(10,22,52,30),5,5)
+            for row in range(3):
+                for col in range(6): painter.drawRoundedRect(QRectF(15+col*7.2,27+row*7,4.5,3.5),.8,.8)
+        elif "mouse" in category:
+            painter.drawRoundedRect(QRectF(23,10,27,49),13,13)
+            painter.drawLine(QLineF(36.5,10,36.5,30)); painter.drawLine(QLineF(31,22,42,22))
+        else:
+            painter.drawRoundedRect(QRectF(23,18,26,39),5,5)
+            painter.drawRect(QRectF(28,10,16,8))
+            painter.drawLine(QLineF(32,12,32,16)); painter.drawLine(QLineF(40,12,40,16))
 
 
 class MetricCard(AppCard):

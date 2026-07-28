@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "ui" / "sentinel"))
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtTest import QTest
 from backend_client import BackendClient
 from backend.security.intelligence import incident_verdict, risk_breakdown
 
@@ -34,6 +35,13 @@ def main():
     timer = getattr(window.page_dashboard, "detection_timer", None)
     assert timer is None or not timer.isActive(), "simulated device timer is active"
     assert not window.page_dashboard.btn_trigger.isVisible(), "simulation control is visible"
+    expanded_width = window.nav_bar.maximumWidth()
+    window.nav_bar.toggle_collapsed()
+    QTest.qWait(300)
+    assert window.nav_bar.collapsed
+    assert window.nav_bar.maximumWidth() < expanded_width
+    window.nav_bar.toggle_collapsed()
+    QTest.qWait(300)
 
     # Verify the exact action structure emitted by IPCServer, including replay.
     captured_actions = []

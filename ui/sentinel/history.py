@@ -2,8 +2,8 @@
 import csv
 from collections import Counter
 from pathlib import Path
-from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtGui import QDesktopServices, QPainter, QPen
+from PyQt6.QtCore import Qt, QUrl, QVariantAnimation, QEasingCurve
+from PyQt6.QtGui import QBrush, QDesktopServices, QPainter, QPen
 from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QComboBox, QTableWidgetItem, QVBoxLayout, QWidget
 from theme import theme_manager
 from widgets import AppButton, AppCard, AppTableWidget, EmptyState
@@ -12,9 +12,13 @@ from asset_pages import KpiCard, PageHeader, label
 
 class HistoryChart(QWidget):
     def __init__(self, parent=None):
-        super().__init__(parent); self.values=[]; self.setMinimumHeight(130)
+        super().__init__(parent); self.values=[]; self.reveal=1.0; self.setMinimumHeight(130)
+        self.animation=QVariantAnimation(self); self.animation.setDuration(600); self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.animation.valueChanged.connect(self._animate)
     def set_values(self, values):
-        self.values=list(values[-14:]); self.update()
+        self.values=list(values[-14:]); self.animation.stop(); self.animation.setStartValue(0.0); self.animation.setEndValue(1.0); self.animation.start()
+    def _animate(self,value):
+        self.reveal=float(value); self.update()
     def paintEvent(self, event):
         p=QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r=self.rect().adjusted(12,12,-12,-18); p.setPen(QPen(theme_manager.get_qcolor("border"),1))
@@ -24,7 +28,7 @@ class HistoryChart(QWidget):
         high=max(max(self.values),1); gap=r.width()/max(len(self.values),1); width=max(5,int(gap*.55))
         p.setPen(Qt.PenStyle.NoPen); p.setBrush(theme_manager.get_qcolor("accent"))
         for index,value in enumerate(self.values):
-            height=r.height()*float(value)/high; x=r.left()+index*gap+(gap-width)/2
+            height=r.height()*float(value)/high*self.reveal; x=r.left()+index*gap+(gap-width)/2
             p.drawRoundedRect(int(x),int(r.bottom()-height),width,int(height),3,3)
 
 
@@ -90,7 +94,12 @@ class HistoryPage(QWidget):
         for row,item in enumerate(rows):
             report=self._reports.get(item["incident_id"],{}); report_state="Available" if report.get("pdf_path") or report.get("json_path") else "Unavailable"
             for col,value in enumerate((item["updated"],item["device_name"],item["verdict"],item["state"],f"{item['risk']}/100",item["incident_id"],report_state)):
-                cell=QTableWidgetItem(str(value)); cell.setData(Qt.ItemDataRole.UserRole,item["incident_id"]); self.table.setItem(row,col,cell)
+                cell=QTableWidgetItem(str(value)); cell.setData(Qt.ItemDataRole.UserRole,item["incident_id"])
+                if col==2:
+                    verdict=str(value).upper()
+                    token="success" if verdict in {"CLEAN","TRUSTED"} else "danger" if verdict=="DANGEROUS" else "warning"
+                    cell.setForeground(QBrush(theme_manager.get_qcolor(token)))
+                self.table.setItem(row,col,cell)
         self.table.setSortingEnabled(True); self.table.resizeColumnsToContents(); self.table.setVisible(bool(rows)); self.empty_state.setVisible(not rows)
         counts=Counter(i["verdict"] for i in self._incidents); threats=counts["DANGEROUS"]+counts["SUSPICIOUS"]; safe=counts["CLEAN"]+counts["TRUSTED"]
         self.kpi_scans.value.setText(str(len(self._incidents))); self.kpi_threats.value.setText(str(threats)); self.kpi_clean.value.setText(str(safe)); self.kpi_incomplete.value.setText(str(counts["INCOMPLETE"]))

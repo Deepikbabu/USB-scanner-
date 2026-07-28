@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QBrush
 from PyQt6.QtWidgets import (
     QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QTableWidgetItem,
     QVBoxLayout, QWidget,
@@ -275,6 +276,15 @@ class DevicesPage(QWidget):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 item.setData(Qt.ItemDataRole.UserRole, row)
+                if column == 4:
+                    verdict = str(value).upper()
+                    token = ("success" if verdict in {"CLEAN", "TRUSTED"} else
+                             "danger" if verdict == "DANGEROUS" else
+                             "warning" if verdict in {"SUSPICIOUS", "INCOMPLETE"} else
+                             "text_secondary")
+                    item.setForeground(QBrush(theme_manager.get_qcolor(token)))
+                elif column == 2 and "connect" in str(value).casefold():
+                    item.setForeground(QBrush(theme_manager.get_qcolor("success")))
                 self.table.setItem(row, column, item)
         self.table.setSortingEnabled(True)
         self.table.resizeColumnsToContents()
@@ -437,6 +447,10 @@ class QuarantinePage(QWidget):
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(str(value))
                 cell.setData(Qt.ItemDataRole.UserRole, item["backend_index"])
+                if column == 5:
+                    cell.setForeground(QBrush(theme_manager.get_qcolor(
+                        "success" if item["verified"] else "danger"
+                    )))
                 self.table.setItem(row, column, cell)
             host = QWidget()
             actions = QHBoxLayout(host)

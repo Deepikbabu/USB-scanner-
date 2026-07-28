@@ -29,9 +29,17 @@ class ApplicationShell(QWidget):
         root.addWidget(content, 1)
 
         self.navigation.tab_changed.connect(self._select_page)
+        self._responsive_checked = False
         self._select_page(0)
         self._apply_theme()
         theme_manager.theme_changed.connect(self._apply_theme)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._responsive_checked and self.width() > 0:
+            self._responsive_checked = True
+            if self.width() < 1120 and not self.navigation.collapsed:
+                self.navigation.toggle_collapsed()
 
     def _build_top_bar(self):
         bar = QFrame(self)
@@ -41,7 +49,16 @@ class ApplicationShell(QWidget):
         layout.setContentsMargins(4, 0, 4, 0)
         self.page_title = QLabel("Dashboard")
         self.page_title.setObjectName("pageTitle")
+        self.menu_button = QPushButton("☰")
+        self.menu_button.setProperty("variant", "ghost")
+        self.menu_button.setFixedSize(36, 36)
+        self.menu_button.setToolTip("Collapse or expand navigation")
+        self.menu_button.clicked.connect(self.navigation.toggle_collapsed)
+        layout.addWidget(self.menu_button)
         layout.addWidget(self.page_title)
+        self.section_label = QLabel(" / SECURITY OPERATIONS")
+        self.section_label.setObjectName("sectionLabel")
+        layout.addWidget(self.section_label)
         layout.addStretch(1)
         self.connection_dot = QLabel("●")
         self.connection_dot.setObjectName("connectionDot")
@@ -78,6 +95,7 @@ class ApplicationShell(QWidget):
             QWidget#shellContent {{ background: {c['bg']}; }}
             QFrame#topBar {{ background: transparent; border: 0; }}
             QLabel#pageTitle {{ color: {c['text_primary']}; font-size: 20px; font-weight: 800; }}
+            QLabel#sectionLabel {{ color: {c['text_muted']}; font-size: 9px; font-weight: 700; }}
             QLabel#connectionDot {{ color: {c['warning']}; font-size: 13px; }}
             QLabel#connectionDot[online="true"] {{ color: {c['success']}; }}
             QLabel#connectionText {{ color: {c['text_secondary']}; font-size: 11px; }}

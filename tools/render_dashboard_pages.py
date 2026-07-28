@@ -11,6 +11,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "ui" / "sentinel")]
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QFontDatabase
+from PyQt6.QtTest import QTest
 from backend_client import BackendClient
 
 BackendClient.start = lambda self: None
@@ -91,6 +92,7 @@ def main():
         window.resize(width, height)
         print(f"Showing {width}x{height}", flush=True)
         window.show()
+        QTest.qWait(700)
         for index, name in enumerate(page_names):
             print(f"Rendering {name}", flush=True)
             window.pages_stack.setCurrentIndex(index)
@@ -100,9 +102,20 @@ def main():
             target = output / f"{name}-{width}x{height}.png"
             if not window.grab().save(str(target), "PNG"):
                 raise RuntimeError(f"Could not render {target}")
+    window.resize(1024, 680)
+    if not window.nav_bar.collapsed:
+        window.nav_bar.toggle_collapsed()
+    QTest.qWait(320)
+    window.pages_stack.setCurrentIndex(0)
+    window.shell._select_page(0)
+    window.nav_bar.set_active_tab(0, emit=False)
+    app.processEvents()
+    target = output / "dashboard-collapsed-1024x680.png"
+    if not window.grab().save(str(target), "PNG"):
+        raise RuntimeError(f"Could not render {target}")
     window.backend.stop()
     window.close()
-    print(f"Rendered {len(page_names) * 2} screenshots to {output}")
+    print(f"Rendered {len(page_names) * 2 + 1} screenshots to {output}")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 from pathlib import Path
 import os
 
-from PyQt6.QtCore import Qt, QTimer, QRectF
+from PyQt6.QtCore import Qt, QTimer, QRectF, QVariantAnimation, QEasingCurve
 from PyQt6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PyQt6.QtCore import QUrl
 from PyQt6.QtWidgets import (
@@ -32,11 +32,17 @@ class ScanRing(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.value = 0
+        self.animation = QVariantAnimation(self)
+        self.animation.setDuration(420); self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.animation.valueChanged.connect(self._set_animated_value)
         self.setFixedSize(170, 170)
 
     def setValue(self, value):
-        self.value = max(0, min(100, int(value or 0)))
-        self.update()
+        target=max(0,min(100,int(value or 0))); self.animation.stop()
+        self.animation.setStartValue(float(self.value)); self.animation.setEndValue(float(target)); self.animation.start()
+
+    def _set_animated_value(self,value):
+        self.value=float(value); self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -48,13 +54,13 @@ class ScanRing(QWidget):
         painter.drawArc(rect, 0, 360 * 16)
         pen.setColor(theme_manager.get_qcolor("accent"))
         painter.setPen(pen)
-        painter.drawArc(rect, 90 * 16, -self.value * 360 * 16 // 100)
+        painter.drawArc(rect, 90 * 16, int(-self.value * 360 * 16 / 100))
         painter.setPen(theme_manager.get_qcolor("text_primary"))
         font = painter.font()
         font.setPixelSize(31)
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{self.value}%")
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{int(self.value)}%")
 
 
 class InventoryCard(AppCard):
