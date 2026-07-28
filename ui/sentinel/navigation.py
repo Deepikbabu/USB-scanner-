@@ -148,7 +148,7 @@ class BottomNavigationBar(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setFixedSize(620, 84)
+        self.setFixedSize(1040, 84)
         
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(12, 0, 12, 0)
@@ -156,9 +156,12 @@ class BottomNavigationBar(QFrame):
         self.buttons = []
         
         nav_items = [
-            ("Dashboard", "dashboard"), 
-            ("Scan", "scan"), 
-            ("History", "history"), 
+            ("Dashboard", "dashboard"),
+            ("Live Scan", "scan"),
+            ("Devices", "scan"),
+            ("Quarantine", "scan"),
+            ("History", "history"),
+            ("Device details", "scan"),
             ("Settings", "settings")
         ]
         
@@ -188,4 +191,3 @@ class BottomNavigationBar(QFrame):
             self.setStyleSheet("QFrame { background: rgba(255, 255, 255, 210); border: 1px solid rgba(0, 0, 0, 15); border-radius: 42px; }")
         else:
             self.setStyleSheet("QFrame { background: rgba(13, 13, 13, 180); border: 1px solid rgba(255, 255, 255, 20); border-radius: 42px; }")
-

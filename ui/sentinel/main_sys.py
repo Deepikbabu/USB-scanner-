@@ -11,6 +11,7 @@ from scan_page import ScanPage
 from history import HistoryPage
 from settings import SettingsPage
 from backend_client import BackendClient
+from asset_pages import DevicesPage, QuarantinePage, DeviceDetailsPage
 
 class PremiumBackgroundWidget(QWidget):
     def __init__(self, parent=None):
@@ -90,10 +91,16 @@ class MainWindow(QMainWindow):
         self.page_scan = ScanPage()
         self.page_history = HistoryPage()
         self.page_settings = SettingsPage()
+        self.page_devices = DevicesPage()
+        self.page_quarantine = QuarantinePage()
+        self.page_device_details = DeviceDetailsPage()
         
         self.pages_stack.addWidget(self.page_dashboard)
         self.pages_stack.addWidget(self.page_scan)
+        self.pages_stack.addWidget(self.page_devices)
+        self.pages_stack.addWidget(self.page_quarantine)
         self.pages_stack.addWidget(self.page_history)
+        self.pages_stack.addWidget(self.page_device_details)
         self.pages_stack.addWidget(self.page_settings)
         
         # Bottom Navigation
@@ -117,9 +124,14 @@ class MainWindow(QMainWindow):
         self._shown_actions = set()
         self._active_incident = None
         self.backend = BackendClient(parent=self)
+        self.page_dashboard.lbl_status.setText("Loading security engine…")
         self.page_settings.recover_hid_requested.connect(self.recover_trusted_hid)
         self.page_settings.quarantine_restore_requested.connect(self.restore_quarantine)
         self.page_settings.quarantine_delete_requested.connect(self.delete_quarantine)
+        self.page_dashboard.retry_requested.connect(self.retry_backend)
+        self.page_quarantine.restore_requested.connect(self.restore_quarantine)
+        self.page_quarantine.delete_requested.connect(self.delete_quarantine)
+        self.page_quarantine.details_requested.connect(self.show_quarantine_details)
         self.backend.connection_changed.connect(self.on_backend_connection)
         self.backend.message_received.connect(self.on_backend_message)
         self.backend.start()
@@ -145,22 +157,42 @@ class MainWindow(QMainWindow):
         if not self.backend.delete_quarantine(index):
             self.page_settings.lbl_status.setText("Delete request could not reach the backend.")
 
+    def show_quarantine_details(self, index):
+        item = self.page_quarantine.table.item(index, 0)
+        name = item.text() if item else "Unknown item"
+        QMessageBox.information(self, "Quarantine details", f"File: {name}\nIntegrity and threat details are available in the final report.")
+
     def closeEvent(self, event):
         self.backend.stop()
         super().closeEvent(event)
 
     def on_backend_connection(self, connected, detail):
         if connected:
+            self.page_dashboard.btn_retry.hide()
             self.page_dashboard.lbl_subtitle.setText("Security engine online — live event stream")
             self.page_dashboard.lbl_status.setText("Secure Terminal: Monitoring")
         else:
+            self.page_dashboard.btn_retry.show()
             self.page_dashboard.lbl_subtitle.setText("Security engine offline — reconnecting")
             self.page_dashboard.lbl_status.setText("Backend unavailable")
             self.page_scan.lbl_scan_info.setText(
                 "Waiting for the usb-scanner service. No scan data is being received."
             )
+            self.page_dashboard.lbl_status.setText("Backend disconnected — retrying")
+
+    def retry_backend(self):
+        self.page_dashboard.btn_retry.setEnabled(False)
+        self.page_dashboard.lbl_status.setText('Retrying connection…')
+        self.backend.stop(); self.backend.start()
+        self.page_dashboard.btn_retry.setEnabled(True)
 
     def on_backend_message(self, message):
+        if message.get("status") == "error" or message.get("event") == "error":
+            detail = str(message.get("error") or message.get("message") or "Backend request failed")
+            self.page_dashboard.lbl_status.setText("Backend error")
+            self.page_dashboard.lbl_subtitle.setText(detail)
+            self.page_scan.lbl_scan_info.setText("Backend error — waiting for retry")
+            return
         # Command response containing the initial authoritative snapshot.
         if message.get("status") == "ok" and isinstance(message.get("data"), dict):
             snapshot = message["data"]
@@ -177,9 +209,11 @@ class MainWindow(QMainWindow):
                     "HID recovery result: " + str(snapshot.get("output") or "No backend details")
                 )
                 if snapshot.get("action") in {"list", "restore", "delete"}:
-                    self.page_settings.lbl_status.setText(
-                        "Quarantine operation: " + ("SUCCESS" if snapshot.get("ok") else "FAILED")
-                    )
+                    ok=bool(snapshot.get('ok')); action=str(snapshot.get('action')).title(); result=f"{action}: {'SUCCESS' if ok else 'FAILED'}"
+                    self.page_settings.lbl_status.setText("Quarantine operation: " + result)
+                    self.page_dashboard.notification_center.add_log(result)
+                    if not ok: QMessageBox.warning(self, 'Quarantine action failed', str(snapshot.get('output') or result))
+                    else: QMessageBox.information(self, 'Quarantine action complete', str(snapshot.get('output') or result))
                     self.backend.command("get_snapshot")
             elif "action" in snapshot:
                 self.page_settings.lbl_status.setText(str(snapshot.get("output") or "Quarantine operation completed."))
@@ -205,6 +239,8 @@ class MainWindow(QMainWindow):
         for action in snapshot.get("pending_actions", []):
             self.apply_event({"event": "user_action_required", "data": dict(action)})
         incidents = snapshot.get("incidents", [])
+        if hasattr(self.page_dashboard, "apply_backend_incidents"):
+            self.page_dashboard.apply_backend_incidents(incidents)
         if hasattr(self.page_history, "apply_backend_incidents"):
             self.page_history.apply_backend_incidents(incidents)
         if hasattr(self.page_settings, "apply_backend_status"):
@@ -241,6 +277,8 @@ class MainWindow(QMainWindow):
         if event == "device_detected":
             device = self.normalize_device(data)
             self.page_dashboard.apply_backend_device(device)
+            self.page_devices.apply_backend_device(device)
+            self.page_device_details.apply_backend_device(device)
             self.page_scan.begin_backend_scan(device)
             self.pages_stack.setCurrentIndex(0)
         elif event == "device_state":
@@ -264,6 +302,7 @@ class MainWindow(QMainWindow):
         elif event == "report_ready":
             self.page_scan.apply_backend_storage_status(data)
             self.page_dashboard.apply_backend_report(data)
+            self.page_quarantine.apply_backend_report(data)
             self.page_scan.apply_report_quarantine(data)
             self.page_scan.complete_backend_scan(data)
             device = self.page_dashboard.connected_device or self.normalize_device(data)
@@ -340,15 +379,23 @@ class MainWindow(QMainWindow):
             QLabel {{ color: {theme_manager.get_color('text_primary')};
                       font-family: 'Inter'; font-size: 12px; min-width: 440px; }}
             QPushButton {{ background-color: {theme_manager.get_color('accent')}; color: #ffffff;
-                           border: none; border-radius: 10px; padding: 9px 16px;
-                           font-family: 'Inter'; font-weight: 700; min-width: 110px; }}
+                           border: none; border-radius: 10px; padding: 10px 18px;
+                           font-family: 'Inter'; font-weight: 700; min-width: 260px; min-height: 42px; }}
             QPushButton:hover {{ opacity: 0.92; }}
         """)
         mapping = {}
+        labels = set()
         for result, label in self.decision_choices(action):
-            button = box.addButton(str(label), QMessageBox.ButtonRole.AcceptRole)
+            label = str(label)
+            labels.add(label.casefold())
+            button = box.addButton(label, QMessageBox.ButtonRole.AcceptRole)
+            button.setMinimumWidth(260)
+            button.setMinimumHeight(42)
             mapping[button] = result
-        box.addButton("Keep blocked", QMessageBox.ButtonRole.RejectRole)
+        if "keep blocked" not in labels:
+            blocked_button = box.addButton("Keep blocked", QMessageBox.ButtonRole.RejectRole)
+            blocked_button.setMinimumWidth(260)
+            blocked_button.setMinimumHeight(42)
         box.exec()
         decision = mapping.get(
             box.clickedButton(), action.get("safe_default") or action.get("default") or "block"

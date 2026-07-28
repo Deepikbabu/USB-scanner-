@@ -1,9 +1,10 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame, QGridLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame, QGridLayout, QPushButton, QFileDialog, QMessageBox
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPointF, QDateTime
 from theme import theme_manager
 from widgets import GlassCard, StatusBadge, draw_category_vector_icon
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QLinearGradient, QPainterPath
 import math
+import csv
 
 class HistoryItemWidget(QFrame):
     def __init__(self, device, timestamp, status, parent=None):
@@ -954,6 +955,9 @@ class HistoryPage(QWidget):
         
         header_layout.addWidget(lbl_welcome)
         header_layout.addWidget(self.lbl_status)
+        self.btn_export = QPushButton('Export CSV'); self.btn_report = QPushButton('View latest report')
+        self.btn_export.clicked.connect(self.export_csv); self.btn_report.clicked.connect(self.view_latest_report)
+        header_layout.addWidget(self.btn_export); header_layout.addWidget(self.btn_report)
         layout.addLayout(header_layout)
         
         # ==========================================
@@ -1063,6 +1067,7 @@ class HistoryPage(QWidget):
 
     def apply_backend_incidents(self, incidents):
         incidents = incidents or []
+        self._backend_incidents = list(incidents)
         risks = [int(item.get("risk", 0) or 0) for item in incidents]
         verdicts = [str(item.get("verdict", "")).upper() for item in incidents]
         blocked = sum(v in {"BLOCKED", "DANGEROUS", "SUSPICIOUS"} for v in verdicts)
@@ -1076,3 +1081,27 @@ class HistoryPage(QWidget):
         for card, value in values.items():
             card.anim_timer.stop(); card.target_val = value; card.current_val = value
             card.lbl_num.setText(f"{card.prefix}{value}{card.suffix}")
+        # Feed the interactive analytics graph from persisted incidents.
+        recent = incidents[-7:]
+        while len(recent) < 7: recent.insert(0, {})
+        self.analytics_graph.days = [str(i.get('timestamp') or i.get('completed_at') or '')[:10] for i in recent]
+        self.analytics_graph.scores = [min(100, int(i.get('risk') or i.get('risk_score') or 0)) for i in recent]
+        self.analytics_graph.devices = [str(i.get('device_name') or i.get('fingerprint') or 'USB') for i in recent]
+        self.analytics_graph.results = [str(i.get('verdict') or 'UNKNOWN') for i in recent]
+        self.analytics_graph.animation_progress = 0.0
+        self.analytics_graph.timer.start(20)
+        self.analytics_graph.update()
+
+    def export_csv(self):
+        if not getattr(self, '_backend_incidents', []): QMessageBox.information(self, 'Export history', 'No scan history is available yet.'); return
+        path,_=QFileDialog.getSaveFileName(self,'Export scan history','scan-history.csv','CSV files (*.csv)')
+        if not path:return
+        keys=['timestamp','device_name','verdict','risk_score','files_scanned','threats','quarantine_count','duration']
+        with open(path,'w',newline='',encoding='utf-8') as f:
+            w=csv.DictWriter(f,fieldnames=keys); w.writeheader(); w.writerows({k:i.get(k,'') for k in keys} for i in self._backend_incidents)
+        QMessageBox.information(self,'Export complete',f'History exported to:\n{path}')
+
+    def view_latest_report(self):
+        items=getattr(self,'_backend_incidents',[])
+        if not items: QMessageBox.information(self,'Report','No completed scan report is available yet.'); return
+        QMessageBox.information(self,'Latest scan report','\n'.join(f'{k}: {v}' for k,v in items[-1].items()))

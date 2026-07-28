@@ -1,5 +1,5 @@
 import math
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedLayout, QScrollArea, QFrame, QGraphicsOpacityEffect, QComboBox, QGridLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedLayout, QScrollArea, QFrame, QGraphicsOpacityEffect, QComboBox, QGridLayout, QProgressBar
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF, QVariantAnimation, QEasingCurve, QTime, QPointF, QDateTime, QPropertyAnimation
 from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush, QLinearGradient, QPainterPath
 from theme import theme_manager
@@ -2617,12 +2617,63 @@ class SystemTrayDropdown(GlassCard):
         self._anim_group.finished.connect(self.hide)
         self._anim_group.start()
 
+class DashboardSparkline(QWidget):
+    def __init__(self, title, color='#25B7F3', parent=None):
+        super().__init__(parent); self.title=title; self.color=QColor(color); self.values=[0]*7; self.setMinimumHeight(110)
+    def set_values(self, values): self.values=list(values[-7:]) or [0]; self.update()
+    def paintEvent(self, event):
+        p=QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing); p.setPen(QPen(QColor('#1F3A50'),1)); r=self.rect().adjusted(8,22,-8,-8); p.drawLine(r.left(),r.bottom(),r.right(),r.bottom()); hi=max(self.values) or 1; step=r.width()/max(1,len(self.values)-1); pts=[QPointF(r.left()+i*step,r.bottom()-v/hi*r.height()) for i,v in enumerate(self.values)]; p.setPen(QPen(self.color,2));
+        for a,b in zip(pts,pts[1:]): p.drawLine(a,b)
+        p.setPen(QColor('#B7C0D1')); p.drawText(8,15,self.title)
+
 class DashboardPage(QWidget):
+    retry_requested = pyqtSignal()
     device_authorized = pyqtSignal(dict)
     device_blocked = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.live_totals = {"devices": 0, "files": 0, "threats": 0, "quarantined": 0}
+
+    def apply_backend_incidents(self, incidents):
+        """Aggregate persisted incidents so dashboard totals never use sample data."""
+        incidents = incidents or []
+        devices = len({str(i.get('device_fingerprint') or i.get('fingerprint') or i.get('device_name') or i.get('incident_id')) for i in incidents})
+        files = sum(int(i.get('files_scanned') or i.get('scan_summary', {}).get('files_scanned') or 0) for i in incidents)
+        threats = sum(int(i.get('threats') or i.get('findings_count') or i.get('scan_summary', {}).get('threats') or 0) for i in incidents)
+        quarantined = sum(int(i.get('quarantine_count') or i.get('quarantined') or 0) for i in incidents)
+        self.live_totals = {"devices": devices, "files": files, "threats": threats, "quarantined": quarantined}
+        if hasattr(self, 'kpi_values'):
+            for key, value in self.live_totals.items(): self.kpi_values[key].setText(f'{value:,}')
+            recent = incidents[-7:]; previous = incidents[-14:-7]
+            def total(items, key): return sum(int(i.get(key) or i.get('scan_summary', {}).get(key) or 0) for i in items)
+            for key in self.live_totals:
+                rk = {'devices':'device_name','files':'files_scanned','threats':'threats','quarantined':'quarantine_count'}[key]
+                rv = len({str(i.get('device_fingerprint') or i.get('device_name') or i.get('incident_id')) for i in recent}) if key=='devices' else total(recent,rk)
+                pv = len({str(i.get('device_fingerprint') or i.get('device_name') or i.get('incident_id')) for i in previous}) if key=='devices' else total(previous,rk)
+                delta = 0 if not pv else round((rv-pv)*100/pv)
+                if key in self.kpi_trends: self.kpi_trends[key].setText(('↑' if delta>=0 else '↓') + f' {abs(delta)}% vs previous period')
+        if hasattr(self, 'risk_chart'):
+            self.risk_chart.set_values([int(i.get('risk') or i.get('risk_score') or 0) for i in incidents])
+            self.scan_chart.set_values([int(i.get('files_scanned') or 0) for i in incidents])
+            self.threat_chart.set_values([int(i.get('threats') or i.get('findings_count') or 0) for i in incidents])
+        if hasattr(self, 'activity_label'):
+            lines=[]
+            for item in incidents[-6:][::-1]:
+                stamp=str(item.get('timestamp') or item.get('completed_at') or 'Recent')[:19]
+                device=item.get('device_name') or item.get('fingerprint') or 'USB device'
+                verdict=item.get('verdict') or ('Threat found' if int(item.get('threats') or 0)>0 else 'Clean')
+                lines.append(f'{stamp}   {device}   —   {verdict}')
+            self.activity_label.setText('\n'.join(lines) if lines else 'No scan activity recorded yet.')
+        if hasattr(self, 'threat_distribution'):
+            counts={'Malware':0,'Suspicious':0,'PUP':0,'Other':0}
+            for item in incidents:
+                for finding in (item.get('findings') or item.get('threats_detail') or []):
+                    kind=str(finding.get('category') or finding.get('threat_type') or finding.get('type') or 'Other').upper()
+                    key='Malware' if 'MALWARE' in kind or 'TROJAN' in kind or 'VIRUS' in kind else 'Suspicious' if 'SUSP' in kind else 'PUP' if 'PUP' in kind else 'Other'; counts[key]+=1
+            self.threat_distribution.setText('   '.join(f'{k}: {v}' for k,v in counts.items()))
+            for key, bar in self.threat_bars.items(): bar.setValue(counts[key])
+        self._incident_totals_updated = True
         self.connected_device = None
         self.device_idx = 0
         
@@ -2666,6 +2717,7 @@ class DashboardPage(QWidget):
         left_header.addWidget(lbl_welcome)
         left_header.addWidget(self.lbl_subtitle)
         left_header.addWidget(self.lbl_status)
+        self.btn_retry = QPushButton('Retry connection'); self.btn_retry.hide(); self.btn_retry.clicked.connect(self.retry_requested.emit); left_header.addWidget(self.btn_retry)
         header_layout.addLayout(left_header)
         
         header_layout.addStretch()
@@ -2715,6 +2767,20 @@ class DashboardPage(QWidget):
         header_layout.addLayout(right_header)
         
         layout.addLayout(header_layout)
+
+        # Live overview totals (authoritative values are supplied by backend snapshots).
+        kpi_row = QHBoxLayout(); self.kpi_values = {}
+        self.kpi_trends = {}
+        for key, title, color in [('devices','Devices scanned','#25B7F3'),('files','Files scanned','#25B7F3'),('threats','Threats found','#FF5C5C'),('quarantined','Files quarantined','#FFB020')]:
+            card=QFrame(); card.setStyleSheet('QFrame{background:#0D1B2A;border:1px solid #1F3A50;border-radius:8px}')
+            cl=QVBoxLayout(card); t=QLabel(title.upper()); t.setStyleSheet('color:#8FA4B8;font-size:10px;font-weight:700'); v=QLabel('0'); v.setStyleSheet(f'color:{color};font-size:22px;font-weight:800'); trend=QLabel('— no comparison data'); trend.setStyleSheet('color:#8FA4B8;font-size:9px'); cl.addWidget(t); cl.addWidget(v); cl.addWidget(trend); self.kpi_values[key]=v; self.kpi_trends[key]=trend; kpi_row.addWidget(card)
+        layout.addLayout(kpi_row)
+        chart_row=QHBoxLayout(); self.risk_chart=DashboardSparkline('Risk trend','#FF5C5C'); self.scan_chart=DashboardSparkline('Files scanned','#25B7F3'); self.threat_chart=DashboardSparkline('Threats found','#FFB020'); chart_row.addWidget(self.risk_chart); chart_row.addWidget(self.scan_chart); chart_row.addWidget(self.threat_chart); layout.addLayout(chart_row)
+        activity_card=QFrame(); activity_card.setStyleSheet('QFrame{background:#0D1B2A;border:1px solid #1F3A50;border-radius:8px}'); al=QVBoxLayout(activity_card); ah=QLabel('RECENT ACTIVITY'); ah.setStyleSheet('color:#8FD8FF;font-size:11px;font-weight:700'); self.activity_label=QLabel('No scan activity recorded yet.'); self.activity_label.setStyleSheet('color:#B7C0D1;font-size:11px'); self.activity_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse); al.addWidget(ah); al.addWidget(self.activity_label); layout.addWidget(activity_card)
+        dist_card=QFrame(); dist_card.setStyleSheet('QFrame{background:#0D1B2A;border:1px solid #1F3A50;border-radius:8px}'); dl=QVBoxLayout(dist_card); dh=QLabel('THREAT DISTRIBUTION'); dh.setStyleSheet('color:#8FD8FF;font-size:11px;font-weight:700'); self.threat_distribution=QLabel('Malware: 0   Suspicious: 0   PUP: 0   Other: 0'); self.threat_distribution.setStyleSheet('color:#B7C0D1;font-size:12px'); dl.addWidget(dh); dl.addWidget(self.threat_distribution); self.threat_bars={}
+        for key,color in [('Malware','#FF5C5C'),('Suspicious','#FFB020'),('PUP','#25B7F3'),('Other','#8FA4B8')]:
+            bar=QProgressBar(); bar.setRange(0,100); bar.setValue(0); bar.setFormat(key+'  %p%'); bar.setStyleSheet(f'QProgressBar{{color:#B7C0D1;background:#12283A;border:0;border-radius:4px;text-align:left;padding:2px}} QProgressBar::chunk{{background:{color};border-radius:3px}}'); dl.addWidget(bar); self.threat_bars[key]=bar
+        layout.addWidget(dist_card)
         
         # Absolute-positioned overlay system tray dropdown
         self.dropdown_tray = SystemTrayDropdown(self.content_widget)
@@ -3191,7 +3257,9 @@ class DashboardPage(QWidget):
         self.notification_center.add_log(f"{state}: {detail}".rstrip(": "))
 
     def apply_backend_risk(self, data):
-        score = int((data or {}).get("total", (data or {}).get("score", 0)) or 0)
+        values = data or {}
+        breakdown = values.get("original") or values.get("breakdown") or values
+        score = int(breakdown.get("total", values.get("total_risk", values.get("score", 0))) or 0)
         remediated = bool((data or {}).get("remediated"))
         level = (
             "DANGEROUS" if score >= 60 else
@@ -3199,7 +3267,6 @@ class DashboardPage(QWidget):
         )
         self.risk_ring.set_threat(score >= 25 or remediated)
         self.lbl_threat_level.setText(f"THREAT SCORE: {score}/100 — {level}")
-        breakdown = ((data or {}).get("original") or (data or {}).get("breakdown") or data or {})
         categories = ("hardware", "trust", "interface", "behavior", "storage", "nvd", "malware")
         details = ", ".join(
             f"{key.title()}: {breakdown.get(key, 0)}" for key in categories
@@ -3242,7 +3309,22 @@ class DashboardPage(QWidget):
         self.last_scan_card.update_scan(summary)
 
     def apply_backend_report(self, data):
-        verdict = str((data or {}).get("verdict", "COMPLETE"))
+        values = data or {}
+        verdict = str(values.get("verdict", "INCOMPLETE")).upper()
+        risk = values.get("risk_breakdown") or {}
+        score = int(risk.get("total", values.get("total_risk", 0)) or 0)
+        if values.get("device"):
+            device = dict(self.connected_device or {})
+            device.update(values["device"])
+            self.connected_device = device
+            self.device_info_card.update_device(device, QTime.currentTime().toString("hh:mm:ss AP"),
+                                                 authorized=verdict in {"CLEAN", "TRUSTED"})
+        self.lbl_threat_level.setText(f"THREAT SCORE: {score}/100 — {verdict}")
+        self.risk_ring.set_threat(verdict in {"DANGEROUS", "SUSPICIOUS", "INCOMPLETE"})
+        summary = getattr(self, "_backend_scan_summary", {})
+        summary.update({"risk_score": score, "status": verdict,
+                        "threats": len(values.get("findings", []))})
+        self._backend_scan_summary = summary
         self.lbl_status.setText(f"Analysis complete — {verdict}")
         self.lbl_meta_category.setText(f"Report generated: {verdict}")
         self.notification_center.add_log(f"Consolidated report ready: {verdict}")
