@@ -26,7 +26,10 @@ def main():
                             total_risk=confirmed["total"]) == "DANGEROUS"
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
-    assert window.pages_stack.count() == 4
+    # The dashboard now exposes Dashboard, Live Scan, Devices, Quarantine,
+    # History, Device Details, and Settings. Keep the validator tolerant of
+    # future additive pages while requiring all core views.
+    assert window.pages_stack.count() >= 7
     assert not window.page_scan.scan_timer.isActive(), "simulated scan timer is active"
     timer = getattr(window.page_dashboard, "detection_timer", None)
     assert timer is None or not timer.isActive(), "simulated device timer is active"
