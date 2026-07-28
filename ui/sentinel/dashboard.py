@@ -3263,7 +3263,7 @@ class DashboardPage(QWidget):
     def apply_backend_risk(self, data):
         values = data or {}
         breakdown = values.get("original") or values.get("breakdown") or values
-        score = int(breakdown.get("total", values.get("total_risk", values.get("score", 0))) or 0)
+        score = int(breakdown.get("total", values.get("total", values.get("total_risk", values.get("score", 0)))) or 0)
         remediated = bool((data or {}).get("remediated"))
         level = (
             "DANGEROUS" if score >= 60 else
