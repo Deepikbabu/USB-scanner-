@@ -58,7 +58,18 @@ def populate(window):
         "quarantine": quarantine,
         "trusted_hid": {"046d:c534": "Logitech receiver"},
         "trusted_storage": {},
-        "reports": [],
+        "signed_trust": [{
+            "identity": "046d:c534:receiver-01", "status": "Trusted",
+            "record": {"type": "HID", "source": "Signed trust store",
+                       "scope": "Exact hardware identity"},
+        }],
+        "reports": [{
+            "incident_id": "INC-1004", "verdict": "DANGEROUS",
+            "total_risk": 75, "files_scanned": 118321, "threat_count": 1,
+            "risk_breakdown": {"malware_detection": 45, "unknown_device": 15,
+                               "suspicious_executable": 15},
+            "findings": ["YARA: suspicious executable · /media/usb/setup_old.exe"],
+        }],
         "email_status": {"enabled": True, "ready": True},
         "metrics": {"incidents": 5, "files_scanned": 2453712,
                     "threats_found": 3, "quarantined_files": 1},
@@ -67,6 +78,10 @@ def populate(window):
                            "incidents": incidents, "resources": resources,
                            "system_status": {"usbguard": True, "yara": True,
                                              "clamav": True, "root": True}})
+    incident = next((item for item in incidents if item["incident_id"] == "INC-1004"), incidents[0])
+    window.page_incident_details.apply_incident(
+        incident, resources["reports"][0]
+    )
 
 
 def main():
@@ -87,7 +102,10 @@ def main():
     window.shell.set_backend_connected(True)
     print("Populating backend-shaped state", flush=True)
     populate(window)
-    page_names = ("dashboard", "live-scan", "devices", "quarantine", "history", "device-details", "settings")
+    page_names = (
+        "dashboard", "live-scan", "devices", "quarantine", "history",
+        "device-details", "settings", "incident-evidence", "trust-management",
+    )
     for width, height in ((1366, 768), (1920, 1080)):
         window.resize(width, height)
         print(f"Showing {width}x{height}", flush=True)

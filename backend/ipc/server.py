@@ -65,6 +65,14 @@ class IPCServer:
                 json_path TEXT, updated REAL)""")
             db.execute("""CREATE TABLE IF NOT EXISTS actions (
                 action_id TEXT PRIMARY KEY, status TEXT, payload TEXT, updated REAL)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS audit_log (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL,
+                operator TEXT, action TEXT, target TEXT, reason TEXT,
+                outcome TEXT, previous_hash TEXT, entry_hash TEXT UNIQUE)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS incident_workflow (
+                incident_id TEXT PRIMARY KEY, assigned_to TEXT,
+                acknowledged INTEGER NOT NULL DEFAULT 0,
+                comments TEXT NOT NULL DEFAULT '[]', updated REAL)""")
         if os.name != "nt":
             self.database.chmod(0o640)
 
@@ -148,6 +156,14 @@ class IPCServer:
                     "status": "accepted" if accepted else "rejected"}
         elif command == "ping":
             data = {"status": "ONLINE", "time": time.time()}
+        elif command == "get_audit_log":
+            data = {"entries": self._audit_entries(
+                int((request.get("data") or {}).get("limit", 250))
+            )}
+        elif command == "update_incident_workflow":
+            data = self._update_incident_workflow(request.get("data") or {})
+        elif command in {"revoke_trust", "expire_trust", "require_trust_rescan"}:
+            data = self._trust_command(command, request.get("data") or {})
         elif command == "recover_hid":
             # Recovery is delegated to the signed-fingerprint verifier. The
             # dashboard cannot directly authorize arbitrary USB devices.
@@ -183,6 +199,122 @@ class IPCServer:
             return {"protocol": 1, "request_id": request_id, "status": "error",
                     "error": "unknown command"}
         return {"protocol": 1, "request_id": request_id, "status": "ok", "data": data}
+
+    def _audit(self, operator: str, action: str, target: str,
+               reason: str, outcome: str) -> None:
+        timestamp = time.time()
+        with sqlite3.connect(self.database) as db:
+            row = db.execute(
+                "SELECT entry_hash FROM audit_log ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            previous = str(row[0]) if row else "GENESIS"
+            body = json.dumps({
+                "timestamp": timestamp, "operator": operator, "action": action,
+                "target": target, "reason": reason, "outcome": outcome,
+                "previous_hash": previous,
+            }, sort_keys=True, separators=(",", ":"))
+            digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            db.execute(
+                "INSERT INTO audit_log(timestamp,operator,action,target,reason,"
+                "outcome,previous_hash,entry_hash) VALUES(?,?,?,?,?,?,?,?)",
+                (timestamp, operator, action, target, reason, outcome, previous, digest),
+            )
+
+    def _audit_entries(self, limit=250) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 1000))
+        with sqlite3.connect(self.database) as db:
+            rows = db.execute(
+                "SELECT sequence,timestamp,operator,action,target,reason,outcome,"
+                "previous_hash,entry_hash FROM audit_log ORDER BY sequence DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        keys = ("sequence", "timestamp", "operator", "action", "target", "reason",
+                "outcome", "previous_hash", "entry_hash")
+        return [dict(zip(keys, row)) for row in rows]
+
+    def _trust_command(self, command: str, values: dict[str, Any]) -> dict[str, Any]:
+        identity = str(values.get("identity") or "").strip()
+        operator = str(values.get("operator") or "").strip()
+        reason = str(values.get("reason") or "").strip()
+        confirmed = values.get("confirm") is True
+        if not identity or not operator or len(reason) < 5 or not confirmed:
+            return {"ok": False, "action": command, "output":
+                    "Exact identity, operator, reason (5+ characters), and confirmation are required."}
+        from backend.security.intelligence import SignedTrustStore
+        store = SignedTrustStore()
+        record, status = store.get(identity)
+        if status != "verified" or not record:
+            self._audit(operator, command, identity, reason, "REJECTED_NOT_VERIFIED")
+            return {"ok": False, "action": command,
+                    "output": "Trust identity is missing or its signature is invalid."}
+        if command == "revoke_trust":
+            store.remove(identity)
+            outcome = "REVOKED"
+        else:
+            updated = dict(record)
+            if command == "expire_trust":
+                seconds = max(60, min(int(values.get("seconds") or 86400), 31536000))
+                updated["expires_at"] = time.time() + seconds
+                updated["expiration_reason"] = reason
+                outcome = "EXPIRATION_SET"
+            else:
+                updated["force_rescan"] = True
+                outcome = "RESCAN_REQUIRED"
+            updated["last_modified_by"] = operator
+            updated["last_modified_reason"] = reason
+            updated["last_modified_at"] = time.time()
+            store.put(identity, updated)
+        self._audit(operator, command, identity, reason, outcome)
+        self.publish("trust_updated", {
+            "identity": identity, "status": outcome, "operator": operator,
+            "reason": reason,
+        })
+        return {"ok": True, "action": command, "identity": identity,
+                "output": outcome}
+
+    def _update_incident_workflow(self, values: dict[str, Any]) -> dict[str, Any]:
+        incident_id = str(values.get("incident_id") or "").strip()
+        operator = str(values.get("operator") or "").strip()
+        if not incident_id or not operator:
+            return {"ok": False, "action": "incident_workflow",
+                    "output": "Incident ID and operator are required."}
+        with sqlite3.connect(self.database) as db:
+            row = db.execute(
+                "SELECT assigned_to,acknowledged,comments FROM incident_workflow "
+                "WHERE incident_id=?", (incident_id,)
+            ).fetchone()
+            assigned = str(row[0] or "") if row else ""
+            acknowledged = bool(row[1]) if row else False
+            try:
+                comments = json.loads(row[2]) if row else []
+            except (TypeError, json.JSONDecodeError):
+                comments = []
+            if "assigned_to" in values:
+                assigned = str(values.get("assigned_to") or "").strip()
+            if "acknowledged" in values:
+                acknowledged = bool(values.get("acknowledged"))
+            comment = str(values.get("comment") or "").strip()
+            if comment:
+                comments.append({"operator": operator, "text": comment,
+                                 "timestamp": time.time()})
+                comments = comments[-200:]
+            db.execute(
+                "INSERT INTO incident_workflow VALUES(?,?,?,?,?) "
+                "ON CONFLICT(incident_id) DO UPDATE SET assigned_to=excluded.assigned_to,"
+                "acknowledged=excluded.acknowledged,comments=excluded.comments,"
+                "updated=excluded.updated",
+                (incident_id, assigned, int(acknowledged),
+                 json.dumps(comments), time.time()),
+            )
+        action = "incident_comment" if comment else (
+            "incident_assignment" if "assigned_to" in values else "incident_acknowledgement"
+        )
+        reason = comment or f"assigned_to={assigned}; acknowledged={acknowledged}"
+        self._audit(operator, action, incident_id, reason, "UPDATED")
+        payload = {"incident_id": incident_id, "assigned_to": assigned,
+                   "acknowledged": acknowledged, "comments": comments}
+        self.publish("incident_workflow_updated", payload, incident_id)
+        return {"ok": True, "action": "incident_workflow", **payload}
 
     def publish(self, event: str, data: dict[str, Any] | None = None,
                 incident_id: str | None = None) -> dict[str, Any]:
@@ -252,8 +384,29 @@ class IPCServer:
                 "active_incidents": list(self.active.values()),
                 "pending_actions": list(self.pending_actions.values()),
                 "recent_events": list(self.recent), "resources": self._resources(),
-                "incidents": self._incidents(),
+                "incidents": self._incidents(), "incident_workflow": self._incident_workflow(),
                 "generated_at": time.time()}
+
+    def _incident_workflow(self) -> dict[str, dict[str, Any]]:
+        try:
+            with sqlite3.connect(self.database) as db:
+                rows = db.execute(
+                    "SELECT incident_id,assigned_to,acknowledged,comments,updated "
+                    "FROM incident_workflow"
+                ).fetchall()
+            result = {}
+            for incident_id, assigned, acknowledged, comments, updated in rows:
+                try:
+                    comment_list = json.loads(comments)
+                except (TypeError, json.JSONDecodeError):
+                    comment_list = []
+                result[str(incident_id)] = {
+                    "assigned_to": assigned or "", "acknowledged": bool(acknowledged),
+                    "comments": comment_list, "updated": updated,
+                }
+            return result
+        except sqlite3.Error:
+            return {}
 
     def _incidents(self) -> list[dict[str, Any]]:
         try:
@@ -342,8 +495,13 @@ class IPCServer:
                 "timestamp": payload.get("timestamp", ""),
                 "device": device,
                 "files": safe_int(inventory.get("files", coverage.get("total_files", 0))),
+                "files_scanned": safe_int(inventory.get("files", coverage.get("total_files", 0))),
                 "threats": threat_count,
+                "threat_count": threat_count,
                 "risk": safe_int(payload.get("total_risk", breakdown.get("total", 0))),
+                "risk_breakdown": breakdown,
+                "findings": findings,
+                "malicious_files": malicious,
                 "quarantine_count": len(payload.get("quarantine_paths", []) or []),
             })
         deliveries = []

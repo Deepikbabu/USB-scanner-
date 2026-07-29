@@ -1,9 +1,12 @@
 import sys
 import random
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QStackedWidget, QMessageBox)
+                             QHBoxLayout, QInputDialog, QStackedWidget, QMessageBox)
 from PyQt6.QtCore import Qt, QDateTime, QPointF
-from PyQt6.QtGui import QPainter, QColor, QRadialGradient, QLinearGradient, QPixmap, QBrush
+from PyQt6.QtGui import (
+    QBrush, QColor, QKeySequence, QLinearGradient, QPainter, QPixmap,
+    QRadialGradient, QShortcut,
+)
 from theme import theme_manager
 from navigation import BottomNavigationBar
 from dashboard import DashboardPage
@@ -13,6 +16,9 @@ from settings import SettingsPage
 from backend_client import BackendClient
 from asset_pages import DevicesPage, QuarantinePage, DeviceDetailsPage
 from shell import ApplicationShell
+from product_features import (
+    CommandPalette, IncidentDetailsPage, ReportPreviewDialog, TrustManagementPage,
+)
 
 class PremiumBackgroundWidget(QWidget):
     def __init__(self, parent=None):
@@ -91,6 +97,8 @@ class MainWindow(QMainWindow):
         self.page_devices = DevicesPage()
         self.page_quarantine = QuarantinePage()
         self.page_device_details = DeviceDetailsPage()
+        self.page_incident_details = IncidentDetailsPage()
+        self.page_trust = TrustManagementPage()
         
         self.pages_stack.addWidget(self.page_dashboard)
         self.pages_stack.addWidget(self.page_scan)
@@ -99,12 +107,17 @@ class MainWindow(QMainWindow):
         self.pages_stack.addWidget(self.page_history)
         self.pages_stack.addWidget(self.page_device_details)
         self.pages_stack.addWidget(self.page_settings)
+        self.pages_stack.addWidget(self.page_incident_details)
+        self.pages_stack.addWidget(self.page_trust)
         
         # One persistent shell owns navigation and page chrome.
         self.shell = ApplicationShell(self.pages_stack)
         self.central_widget = self.shell
         self.setCentralWidget(self.shell)
         self.nav_bar = self.shell.navigation
+        self.command_palette = CommandPalette(self)
+        self.command_palette.command_selected.connect(self._run_palette_command)
+        self._install_shortcuts()
         
         # Connect navigation switching with transition animation
         self.nav_bar.tab_changed.connect(self.switch_page)
@@ -116,24 +129,146 @@ class MainWindow(QMainWindow):
         self.backend = BackendClient(parent=self)
         self.page_dashboard.lbl_status.setText("Loading security engine…")
         self.page_settings.recover_hid_requested.connect(self.recover_trusted_hid)
+        self.page_settings.diagnostics_requested.connect(self.run_diagnostics)
+        self.page_settings.trust_management_requested.connect(
+            lambda: self.switch_context_page(8)
+        )
+        self.page_settings.dashboard_preferences_changed.connect(
+            self.page_dashboard.set_widget_visibility
+        )
         self.page_settings.quarantine_restore_requested.connect(self.restore_quarantine)
         self.page_settings.quarantine_delete_requested.connect(self.delete_quarantine)
         self.page_dashboard.retry_requested.connect(self.retry_backend)
+        self.page_dashboard.setup_requested.connect(lambda:self.nav_bar.set_active_tab(6))
         self.page_quarantine.restore_requested.connect(self.restore_quarantine)
         self.page_quarantine.delete_requested.connect(self.delete_quarantine)
         self.page_quarantine.details_requested.connect(self.show_quarantine_details)
         self.page_devices.device_selected.connect(self.show_device_details)
+        self.page_history.incident_selected.connect(self.show_incident_details)
+        self.page_history.report_preview_requested.connect(self.preview_report)
+        self.page_trust.trust_action_requested.connect(self.request_trust_action)
+        self.page_incident_details.workflow_update_requested.connect(
+            self.update_incident_workflow
+        )
+        self.page_incident_details.back_requested.connect(
+            lambda:self.nav_bar.set_active_tab(4)
+        )
+        self.page_trust.back_requested.connect(lambda:self.nav_bar.set_active_tab(6))
         self.backend.connection_changed.connect(self.on_backend_connection)
         self.backend.message_received.connect(self.on_backend_message)
         self.backend.start()
         
         self.update_theme_styles()
         theme_manager.theme_changed.connect(self.update_theme_styles)
+        theme_manager.accessibility_changed.connect(self.update_theme_styles)
+
+    def _install_shortcuts(self):
+        """Keyboard navigation for desktop, kiosk, and accessibility use."""
+        self._shortcuts = []
+        for key, page in ((1, 0), (2, 1), (3, 2), (4, 3), (5, 4), (6, 6)):
+            shortcut = QShortcut(QKeySequence(f"Ctrl+{key}"), self)
+            shortcut.activated.connect(
+                lambda target=page: self.nav_bar.set_active_tab(target)
+            )
+            self._shortcuts.append(shortcut)
+        sidebar = QShortcut(QKeySequence("F10"), self)
+        sidebar.activated.connect(self.nav_bar.toggle_collapsed)
+        self._shortcuts.append(sidebar)
+        palette = QShortcut(QKeySequence("Ctrl+K"), self)
+        palette.activated.connect(self._open_command_palette)
+        self._shortcuts.append(palette)
+
+    def _open_command_palette(self):
+        commands = [
+            ("page:0", "Open Dashboard", "Security operations overview · Ctrl+1"),
+            ("page:1", "Open Live Scan", "Current device analysis · Ctrl+2"),
+            ("page:2", "Open Devices", "Connected and historical identities · Ctrl+3"),
+            ("page:3", "Open Quarantine", "Isolated evidence vault · Ctrl+4"),
+            ("page:4", "Open History", "Incident reports and evidence · Ctrl+5"),
+            ("page:6", "Open Settings", "Diagnostics, trust, and accessibility · Ctrl+6"),
+            ("page:8", "Open Trust Management", "Review signed hardware identities"),
+            ("action:refresh", "Refresh backend snapshot", "Request authoritative scanner state"),
+            ("action:notifications", "Open notification centre", "Review recent security activity"),
+        ]
+        for record in getattr(self.page_devices, "_records", [])[:30]:
+            name = str(record.get("name") or "Unknown USB device")
+            fingerprint = str(record.get("fingerprint") or record.get("serial") or "")
+            commands.append(
+                (f"device:{len(commands)}", f"Inspect {name}", fingerprint)
+            )
+            commands[-1] = (*commands[-1], record)
+        self._palette_records = {
+            command[0]: command[3] for command in commands if len(command) > 3
+        }
+        self.command_palette.set_commands([command[:3] for command in commands])
+        self.command_palette.open_palette()
+
+    def _run_palette_command(self, command):
+        if command.startswith("page:"):
+            self.nav_bar.set_active_tab(int(command.split(":", 1)[1]))
+        elif command == "action:refresh":
+            self.backend.command("get_snapshot")
+            self.shell.show_toast("Refreshing authoritative backend state", "info")
+        elif command == "action:notifications":
+            self.shell.show_notification_center()
+        elif command.startswith("device:"):
+            device = getattr(self, "_palette_records", {}).get(command)
+            if device:
+                self.shell.inspect_device(device, device)
 
     def recover_trusted_hid(self):
         self.page_settings.lbl_hid_recovery.setText("Verifying fingerprints and restoring authorized HID devices…")
         if not self.backend.recover_hid():
             self.page_settings.lbl_hid_recovery.setText("Recovery request could not reach the backend.")
+
+    def run_diagnostics(self):
+        if self.backend.command("get_snapshot"):
+            self.shell.show_toast(
+                "Diagnostics requested · checking scanner capabilities", "info"
+            )
+        else:
+            self.page_settings.btn_diagnostics.setEnabled(True)
+            self.page_settings.btn_diagnostics.setText("Run diagnostics")
+            self.page_settings.lbl_status.setText(
+                "Diagnostics could not reach the security backend."
+            )
+            self.shell.show_toast("Diagnostics request failed", "danger")
+
+    def request_trust_action(self, action, identity):
+        operator, ok = QInputDialog.getText(
+            self, "Operator identity", "Operator name or account:"
+        )
+        if not ok or not operator.strip():
+            return
+        reason, ok = QInputDialog.getText(
+            self, "Audit reason", "Reason for this trust-policy change:"
+        )
+        if not ok or len(reason.strip()) < 5:
+            QMessageBox.warning(
+                self, "Audit reason required",
+                "Enter a meaningful reason of at least five characters.",
+            )
+            return
+        labels = {
+            "revoke_trust": "revoke this device's trust",
+            "expire_trust": "set this trust record to expire in 24 hours",
+            "require_trust_rescan": "require a full rescan on next connection",
+        }
+        answer = QMessageBox.question(
+            self, "Confirm trust-policy change",
+            f"Identity:\n{identity}\n\nAction: {labels.get(action, action)}\n"
+            f"Operator: {operator}\nReason: {reason}\n\n"
+            "This action is recorded in the tamper-evident audit ledger.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        seconds = 86400 if action == "expire_trust" else None
+        if self.backend.mutate_trust(
+            action, identity, operator.strip(), reason.strip(), seconds
+        ):
+            self.shell.show_toast("Trust-policy change submitted", "warning")
+        else:
+            self.shell.show_toast("Backend unavailable; no trust change was made", "danger")
 
     def restore_quarantine(self, index):
         answer = QMessageBox.question(
@@ -174,7 +309,39 @@ class MainWindow(QMainWindow):
 
     def show_device_details(self, device):
         self.page_device_details.apply_backend_device(device)
+        self.shell.inspect_device(device, device)
         self.nav_bar.set_active_tab(5)
+
+    def show_incident_details(self, incident, report):
+        self._selected_incident_id = str(
+            incident.get("incident_id") or report.get("incident_id") or ""
+        )
+        self.page_incident_details.apply_incident(incident, report)
+        self.page_incident_details.apply_workflow(
+            getattr(self, "_incident_workflow", {}).get(self._selected_incident_id, {})
+        )
+        self.switch_context_page(7)
+
+    def preview_report(self, report):
+        self._report_preview = ReportPreviewDialog(report, self)
+        self._report_preview.exec()
+
+    def update_incident_workflow(self, incident_id, changes):
+        operator, ok = QInputDialog.getText(
+            self, "Operator identity", "Operator name or account:"
+        )
+        if not ok or not operator.strip():
+            return
+        if self.backend.update_incident_workflow(
+            incident_id, operator.strip(), **dict(changes)
+        ):
+            self.shell.show_toast("Incident workflow update submitted", "info")
+        else:
+            self.shell.show_toast("Backend unavailable; incident was not updated", "danger")
+
+    def switch_context_page(self, index):
+        self.pages_stack.setCurrentIndex(index)
+        self.shell._select_page(index)
 
     def closeEvent(self, event):
         self.backend.stop()
@@ -183,10 +350,15 @@ class MainWindow(QMainWindow):
     def on_backend_connection(self, connected, detail):
         self.shell.set_backend_connected(connected)
         if connected:
+            self.shell.show_toast("Security backend connected", "success", 2800)
             self.page_dashboard.btn_retry.hide()
             self.page_dashboard.lbl_subtitle.setText("Security engine online — live event stream")
             self.page_dashboard.lbl_status.setText("Secure Terminal: Monitoring")
         else:
+            self.shell.show_toast(
+                "Security backend is offline. Reconnection is in progress.",
+                "warning", 5200,
+            )
             self.page_dashboard.btn_retry.show()
             self.page_dashboard.lbl_subtitle.setText("Security engine offline — reconnecting")
             self.page_dashboard.lbl_status.setText("Backend unavailable")
@@ -207,6 +379,7 @@ class MainWindow(QMainWindow):
             self.page_dashboard.lbl_status.setText("Backend error")
             self.page_dashboard.lbl_subtitle.setText(detail)
             self.page_scan.lbl_scan_info.setText("Backend error — waiting for retry")
+            self.shell.show_toast(detail, "danger", 6000)
             return
         # Command response containing the initial authoritative snapshot.
         if message.get("status") == "ok" and isinstance(message.get("data"), dict):
@@ -280,6 +453,8 @@ class MainWindow(QMainWindow):
                     "data": active_data,
                 })
         incidents = snapshot.get("incidents", [])
+        self._incident_workflow = dict(snapshot.get("incident_workflow") or {})
+        self._latest_incidents = list(incidents)
         if hasattr(self.page_dashboard, "apply_backend_incidents"):
             self.page_dashboard.apply_backend_incidents(incidents)
         if hasattr(self.page_dashboard, "apply_backend_resources"):
@@ -297,6 +472,12 @@ class MainWindow(QMainWindow):
         if hasattr(self.page_settings, "apply_backend_status"):
             self.page_settings.apply_backend_status(
                 snapshot.get("system_status", {}), snapshot.get("resources", {})
+            )
+        self.page_dashboard.apply_readiness(snapshot.get("system_status", {}))
+        self.page_trust.apply_backend_resources(snapshot.get("resources", {}))
+        if getattr(self, "_selected_incident_id", None):
+            self.page_incident_details.apply_workflow(
+                self._incident_workflow.get(self._selected_incident_id, {})
             )
 
     @staticmethod
@@ -331,12 +512,20 @@ class MainWindow(QMainWindow):
             self.page_devices.apply_backend_device(device)
             self.page_device_details.apply_backend_device(device)
             self.page_scan.begin_backend_scan(device)
+            self.shell.begin_scan(device.get("name"))
+            self.shell.inspect_device(device)
+            self.shell.add_evidence_event("Device detected", device.get("port", ""))
+            self.shell.show_toast(
+                f"{device.get('name', 'USB device')} detected · analysis started",
+                "info", 3200,
+            )
             self.pages_stack.setCurrentIndex(0)
         elif event == "device_state":
             state, detail = data.get("state", "UNKNOWN"), data.get("detail", "")
             self.page_dashboard.apply_backend_state(state, detail)
             self.page_scan.apply_backend_state(state, detail)
             self.page_devices.apply_backend_state(state, detail)
+            self.shell.add_evidence_event(f"Device state · {state}", detail)
             self.page_dashboard.connected_device.update({"usbguard_state": state, "state_detail": detail}) if self.page_dashboard.connected_device else None
             if self.page_dashboard.connected_device:
                 self.page_device_details.apply_backend_device(
@@ -347,26 +536,54 @@ class MainWindow(QMainWindow):
                 self.page_devices.apply_backend_disconnect()
         elif event == "scan_progress":
             self.page_scan.apply_backend_progress(data)
+            self.shell.update_scan(
+                data.get("progress", 0),
+                data.get("message") or "Security analysis in progress",
+            )
         elif event == "scan_complete":
             self.page_scan.apply_backend_scan_complete(data)
             self.page_dashboard.apply_backend_scan_complete(data)
+            self.shell.add_evidence_event(
+                "Scanner engines completed",
+                f"{data.get('files', 0)} files processed",
+            )
         elif event == "finding_detected":
             self.page_scan.apply_backend_finding(data)
             self.page_dashboard.apply_backend_finding(data)
+            self.shell.show_toast(
+                str(data.get("finding") or data.get("reason") or "Security finding detected"),
+                "danger", 5500,
+            )
+            self.shell.add_evidence_event(
+                "Finding detected",
+                str(data.get("finding") or data.get("reason") or ""),
+            )
         elif event == "risk_updated":
             self.page_dashboard.apply_backend_risk(data)
             self.page_scan.apply_backend_risk(data)
+            self.shell.operations_drawer.apply_risk(data)
+            self.shell.add_evidence_event(
+                f"Risk updated · {data.get('total', data.get('risk_score', 0))}/100"
+            )
         elif event == "report_ready":
             self.page_scan.apply_backend_storage_status(data)
             self.page_dashboard.apply_backend_report(data)
             self.page_quarantine.apply_backend_report(data)
             self.page_scan.apply_report_quarantine(data)
             self.page_scan.complete_backend_scan(data)
+            verdict = str(data.get("verdict") or "Complete")
+            self.shell.complete_scan(verdict)
+            self.shell.add_evidence_event("Final report ready", verdict)
+            self.shell.show_toast(
+                f"Scan completed · {verdict}",
+                "success" if verdict.upper() in {"CLEAN", "SAFE", "ALLOWED"} else "warning",
+                5000,
+            )
             device = self.page_dashboard.connected_device or self.normalize_device(data)
             stamp = QDateTime.currentDateTime().toString("yyyy-MM-dd hh:mm:ss")
             self.page_history.add_log_entry(device, stamp, str(data.get("verdict", "COMPLETE")))
             self.backend.command("get_snapshot")
-        elif event in {"quarantine_updated", "email_delivery_updated", "trust_updated"}:
+        elif event in {"quarantine_updated", "email_delivery_updated", "trust_updated", "incident_workflow_updated"}:
             self.page_dashboard.notification_center.add_log(
                 f"{event.replace('_', ' ').title()}: {data.get('status') or data.get('reason') or 'updated'}"
             )
@@ -374,6 +591,10 @@ class MainWindow(QMainWindow):
             if event == "quarantine_updated":
                 self.page_scan.apply_quarantine_event(data)
                 self.page_quarantine.apply_backend_event(data)
+            elif event == "incident_workflow_updated":
+                self._incident_workflow = getattr(self, "_incident_workflow", {})
+                self._incident_workflow[str(data.get("incident_id"))] = dict(data)
+                self.page_incident_details.apply_workflow(data)
             self.backend.command("get_snapshot")
         elif event == "log":
             self.page_dashboard.notification_center.add_log(str(data.get("message", "Backend update")))
@@ -430,7 +651,10 @@ class MainWindow(QMainWindow):
         box.setText(str(action.get("title", "Device decision required")))
         box.setInformativeText(
             f"Device: {action.get('device_name') or action.get('device') or 'Unknown'}\n\n{action.get('summary', '')}\n\n"
-            "The device remains blocked until you choose."
+            "The device remains blocked until you choose.\n\n"
+            f"Recommended safe action: "
+            f"{str(action.get('safe_default') or action.get('default') or 'keep blocked').replace('_', ' ').title()}.\n"
+            "Trust decisions should only be used when the device identity and expected behavior are verified."
         )
         box.setStyleSheet(f"""
             QMessageBox {{ background-color: {theme_manager.get_color('bg')}; }}

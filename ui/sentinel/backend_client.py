@@ -76,6 +76,18 @@ class BackendClient(QObject):
     def delete_quarantine(self, index):
         return self.command("delete_quarantine", {"index": index, "confirm": True})
 
+    def mutate_trust(self, action, identity, operator, reason, seconds=None):
+        data = {"identity": identity, "operator": operator, "reason": reason,
+                "confirm": True}
+        if seconds is not None:
+            data["seconds"] = int(seconds)
+        return self.command(action, data)
+
+    def update_incident_workflow(self, incident_id, operator, **changes):
+        return self.command("update_incident_workflow", {
+            "incident_id": incident_id, "operator": operator, **changes,
+        })
+
 
     def _run(self):
         while self._running:

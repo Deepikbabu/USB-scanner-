@@ -2,7 +2,7 @@
 
 from collections import deque
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QLineF, QPropertyAnimation, QVariantAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal, QRectF, QLineF, QPropertyAnimation, QVariantAnimation, QEasingCurve
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QBrush
 from PyQt6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
@@ -202,6 +202,7 @@ class NotificationCenter(AppCard):
 
 class DashboardPage(QWidget):
     retry_requested = pyqtSignal()
+    setup_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -229,6 +230,25 @@ class DashboardPage(QWidget):
         self.btn_retry.hide()
         header.addWidget(self.btn_retry)
         root.addLayout(header)
+        self.readiness_card = AppCard()
+        readiness_layout = QHBoxLayout(self.readiness_card)
+        readiness_text = QVBoxLayout()
+        readiness_text.addWidget(_label("Complete production readiness",size=11,weight=800))
+        self.readiness_detail = _label(
+            "Verify USBGuard, scanner engines, privileges, quarantine, and evidence delivery.",
+            muted=True,size=9,
+        )
+        readiness_text.addWidget(self.readiness_detail)
+        readiness_layout.addLayout(readiness_text,1)
+        readiness_button=AppButton("Open setup and diagnostics","primary")
+        readiness_button.clicked.connect(self.setup_requested)
+        readiness_layout.addWidget(readiness_button)
+        root.addWidget(self.readiness_card)
+        self.readiness_card.setVisible(
+            str(QSettings("BBBS","USB Security Scanner").value(
+                "onboarding/readiness_complete","false"
+            )).lower()!="true"
+        )
 
         metrics = QGridLayout()
         metrics.setSpacing(10)
@@ -245,8 +265,8 @@ class DashboardPage(QWidget):
 
         middle = QHBoxLayout()
         middle.setSpacing(10)
-        trend_card = AppCard()
-        trend_layout = QVBoxLayout(trend_card)
+        self.trend_card = AppCard()
+        trend_layout = QVBoxLayout(self.trend_card)
         trend_layout.setContentsMargins(16, 14, 16, 12)
         title_row = QHBoxLayout()
         title_row.addWidget(_label("RISK TREND", muted=True, size=10, weight=800))
@@ -255,10 +275,10 @@ class DashboardPage(QWidget):
         trend_layout.addLayout(title_row)
         self.risk_chart = TrendChart()
         trend_layout.addWidget(self.risk_chart)
-        middle.addWidget(trend_card, 3)
+        middle.addWidget(self.trend_card, 3)
 
-        device_card = AppCard()
-        device_layout = QVBoxLayout(device_card)
+        self.device_card = AppCard()
+        device_layout = QVBoxLayout(self.device_card)
         device_layout.setContentsMargins(16, 14, 16, 14)
         device_layout.addWidget(_label("CURRENT DEVICE", muted=True, size=10, weight=800))
         device_head = QHBoxLayout()
@@ -275,7 +295,7 @@ class DashboardPage(QWidget):
         device_layout.addLayout(device_head)
         self.lbl_threat_level = _label("Risk level: —", muted=True, size=11, weight=700)
         device_layout.addWidget(self.lbl_threat_level)
-        middle.addWidget(device_card, 2)
+        middle.addWidget(self.device_card, 2)
         root.addLayout(middle, 1)
 
         lower = QHBoxLayout()
@@ -289,6 +309,36 @@ class DashboardPage(QWidget):
         # Compatibility control: retained for validators, never shown.
         self.btn_trigger = QPushButton("Simulate")
         self.btn_trigger.hide()
+        preferences = QSettings("BBBS", "USB Security Scanner")
+        self.set_widget_visibility(
+            str(preferences.value("dashboard/show_risk", "true")).lower() == "true",
+            str(preferences.value("dashboard/show_activity", "true")).lower() == "true",
+        )
+
+    def set_widget_visibility(self, show_risk=True, show_activity=True):
+        self.trend_card.setVisible(bool(show_risk))
+        self.notification_center.setVisible(bool(show_activity))
+        settings = QSettings("BBBS", "USB Security Scanner")
+        settings.setValue("dashboard/show_risk", bool(show_risk))
+        settings.setValue("dashboard/show_activity", bool(show_activity))
+
+    def apply_readiness(self, system_status):
+        aliases = ("usbguard", "clamav", "yara", "root")
+        ready = sum(
+            str((system_status or {}).get(key, "")).upper()
+            in {"READY", "ONLINE", "OK", "ACTIVE", "TRUE", "ENABLED"}
+            or (system_status or {}).get(key) is True
+            for key in aliases
+        )
+        self.readiness_detail.setText(
+            f"{ready}/4 critical enforcement capabilities are ready."
+        )
+        complete = ready == len(aliases)
+        if complete:
+            QSettings("BBBS","USB Security Scanner").setValue(
+                "onboarding/readiness_complete", True
+            )
+            self.readiness_card.hide()
 
     @staticmethod
     def _category_from_state(state, detail, current):

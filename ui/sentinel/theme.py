@@ -1,6 +1,6 @@
 """Shared Sentinel design tokens and application-wide Qt styling."""
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QFontDatabase
 
 
@@ -56,10 +56,18 @@ RADIUS = {"sm": 6, "md": 9, "lg": 12}
 
 class ThemeManager(QObject):
     theme_changed = pyqtSignal(str)
+    motion_changed = pyqtSignal(bool)
+    accessibility_changed = pyqtSignal()
 
     def __init__(self):
         super().__init__()
-        self.current_theme = "dark"
+        settings = QSettings("BBBS", "USB Security Scanner")
+        self.current_theme = str(settings.value("appearance/theme", "dark"))
+        self.reduced_motion = str(settings.value("accessibility/reduced_motion", "false")).lower() == "true"
+        self.high_contrast = str(settings.value("accessibility/high_contrast", "false")).lower() == "true"
+        self.touch_mode = str(settings.value("accessibility/touch_mode", "false")).lower() == "true"
+        self.text_scale = float(settings.value("accessibility/text_scale", 1.0))
+        self._settings = settings
 
     @property
     def colors(self):
@@ -84,7 +92,30 @@ class ThemeManager(QObject):
     def set_theme(self, theme_name):
         if theme_name in {"dark", "light"} and self.current_theme != theme_name:
             self.current_theme = theme_name
+            self._settings.setValue("appearance/theme", theme_name)
             self.theme_changed.emit(theme_name)
+
+    def set_reduced_motion(self, enabled):
+        enabled = bool(enabled)
+        if self.reduced_motion != enabled:
+            self.reduced_motion = enabled
+            self._settings.setValue("accessibility/reduced_motion", enabled)
+            self.motion_changed.emit(enabled)
+
+    def set_high_contrast(self, enabled):
+        self.high_contrast = bool(enabled)
+        self._settings.setValue("accessibility/high_contrast", self.high_contrast)
+        self.accessibility_changed.emit()
+
+    def set_touch_mode(self, enabled):
+        self.touch_mode = bool(enabled)
+        self._settings.setValue("accessibility/touch_mode", self.touch_mode)
+        self.accessibility_changed.emit()
+
+    def set_text_scale(self, scale):
+        self.text_scale = max(0.9, min(1.3, float(scale)))
+        self._settings.setValue("accessibility/text_scale", self.text_scale)
+        self.accessibility_changed.emit()
 
     def stylesheet(self):
         c = self.colors
@@ -94,9 +125,15 @@ class ThemeManager(QObject):
              if name in available),
             "Sans Serif",
         )
+        focus_width = 3 if self.high_contrast else 2
+        button_height = 46 if self.touch_mode else 34
+        row_height = 46 if self.touch_mode else 36
+        base_size = int(10 * self.text_scale)
+        contrast_border = c['text_secondary'] if self.high_contrast else c['border']
         return f"""
         * {{
             font-family: "{font_family}";
+            font-size: {base_size}px;
             outline: none;
         }}
         QMainWindow, QWidget#appRoot {{
@@ -111,7 +148,7 @@ class ThemeManager(QObject):
             border-radius: {RADIUS['lg']}px;
         }}
         QPushButton {{
-            min-height: 34px;
+            min-height: {button_height}px;
             padding: 0 14px;
             color: {c['text_primary']};
             background-color: {c['btn_bg']};
@@ -120,6 +157,7 @@ class ThemeManager(QObject):
             font-weight: 600;
         }}
         QPushButton:hover {{ background-color: {c['btn_hover']}; border-color: {c['accent']}; }}
+        QPushButton:focus {{ border: {focus_width}px solid {c['accent']}; }}
         QPushButton:pressed {{ background-color: {c['accent_soft']}; }}
         QPushButton:disabled {{ color: {c['text_muted']}; background-color: {c['surface']}; }}
         QPushButton[variant="primary"] {{
@@ -130,16 +168,17 @@ class ThemeManager(QObject):
             color: {c['danger']}; background-color: transparent; border-color: {c['danger']};
         }}
         QPushButton[variant="ghost"] {{ background-color: transparent; border-color: transparent; }}
-        QLineEdit, QComboBox {{
+        QLineEdit, QComboBox, QDateEdit {{
             min-height: 34px;
             padding: 0 10px;
             color: {c['text_primary']};
             background-color: {c['surface_raised']};
-            border: 1px solid {c['border']};
+            border: 1px solid {contrast_border};
             border-radius: {RADIUS['sm']}px;
             selection-background-color: {c['accent']};
         }}
-        QLineEdit:focus, QComboBox:focus {{ border-color: {c['accent']}; }}
+        QLineEdit:focus, QComboBox:focus, QDateEdit:focus {{ border-color: {c['accent']}; }}
+        QDateEdit::drop-down {{ border: 0; width: 22px; }}
         QTableView, QTableWidget {{
             color: {c['text_primary']};
             background-color: {c['surface']};
@@ -150,7 +189,8 @@ class ThemeManager(QObject):
             selection-background-color: {c['accent_soft']};
             selection-color: {c['text_primary']};
         }}
-        QTableView::item, QTableWidget::item {{ min-height: 36px; padding: 7px 9px; border: 0; }}
+        QTableView::item, QTableWidget::item {{ min-height: {row_height}px; padding: 7px 9px; border: 0; }}
+        QTableView:focus, QTableWidget:focus {{ border: {focus_width}px solid {c['accent']}; }}
         QHeaderView::section {{
             min-height: 34px;
             padding: 6px 9px;

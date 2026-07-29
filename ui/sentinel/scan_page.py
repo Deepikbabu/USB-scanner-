@@ -2,8 +2,10 @@
 
 from pathlib import Path
 import os
+import re
+from collections import deque
 
-from PyQt6.QtCore import Qt, QTimer, QRectF, QVariantAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, QVariantAnimation, QEasingCurve
 from PyQt6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PyQt6.QtCore import QUrl
 from PyQt6.QtWidgets import (
@@ -61,6 +63,40 @@ class ScanRing(QWidget):
         font.setBold(True)
         painter.setFont(font)
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{int(self.value)}%")
+
+
+class ThroughputChart(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.values = deque([0.0] * 24, maxlen=24)
+        self.setMinimumSize(160, 70)
+        self.setAccessibleName("Real-time scan throughput chart")
+
+    def add_value(self, value):
+        self.values.append(max(0.0, float(value or 0)))
+        self.update()
+
+    def reset(self):
+        self.values = deque([0.0] * 24, maxlen=24)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(5, 7, -5, -7)
+        painter.setPen(QPen(theme_manager.get_qcolor("border"), 1))
+        painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+        high = max(max(self.values), 1.0)
+        points = []
+        for index, value in enumerate(self.values):
+            x = rect.left() + rect.width() * index / max(len(self.values) - 1, 1)
+            y = rect.bottom() - rect.height() * value / high
+            points.append((x, y))
+        painter.setPen(QPen(theme_manager.get_qcolor("accent"), 2))
+        for first, second in zip(points, points[1:]):
+            painter.drawLine(
+                QPointF(first[0], first[1]), QPointF(second[0], second[1])
+            )
 
 
 class InventoryCard(AppCard):
@@ -135,6 +171,12 @@ class ScanPage(QWidget):
         self.scan_badge = StatusBadge("Idle", tone="neutral")
         header_layout.addWidget(self.scan_badge)
         root.addWidget(header)
+        self.phase_label = _label(
+            "01  ISOLATE   ·   02  INVENTORY   ·   03  ANALYZE   ·   04  REMEDIATE   ·   05  REPORT",
+            muted=True, size=9, weight=700,
+        )
+        self.phase_label.setAccessibleName("Scan phase timeline")
+        root.addWidget(self.phase_label)
 
         overview = QHBoxLayout()
         overview.setSpacing(10)
@@ -156,6 +198,11 @@ class ScanPage(QWidget):
             self.metric_labels[key] = value
             metrics.addWidget(value, index, 1)
         progress_layout.addLayout(metrics, 1)
+        chart_host = QVBoxLayout()
+        chart_host.addWidget(_label("LIVE THROUGHPUT", muted=True, size=9, weight=800))
+        self.throughput_chart = ThroughputChart()
+        chart_host.addWidget(self.throughput_chart)
+        progress_layout.addLayout(chart_host)
         overview.addWidget(progress_card, 3)
 
         engines = AppCard()
@@ -232,6 +279,8 @@ class ScanPage(QWidget):
         self.scan_progress = 0
         self.progress_ring.setValue(0)
         self.coverage.setValue(0)
+        self.throughput_chart.reset()
+        self._set_phase(1)
         name = device.get("name", "Unknown USB device")
         meta = f"{device.get('category', 'USB device')}  •  {device.get('serial', 'Serial unavailable')}"
         self.lbl_status.setText(name)
@@ -247,6 +296,10 @@ class ScanPage(QWidget):
         for key in ("files", "speed", "elapsed", "remaining"):
             if key in data:
                 self.metric_labels[key].setText(str(data[key]))
+        speed_match = re.search(r"[\d.]+", str(data.get("speed", "0")))
+        if speed_match:
+            self.throughput_chart.add_value(float(speed_match.group(0)))
+        self._set_phase(2 if self.scan_progress < 15 else 3 if self.scan_progress < 90 else 4)
 
     def apply_backend_scan_complete(self, data):
         inventory = dict(data.get("inventory") or {})
@@ -255,6 +308,15 @@ class ScanPage(QWidget):
         self.metric_labels["files"].setText(str(inventory.get("files", 0)))
         self.lbl_scan_info.setText("Scan complete; consolidating final evidence and verdict.")
         self.scan_badge.update_badge("Consolidating", tone="warning")
+        self._set_phase(5)
+
+    def _set_phase(self, active):
+        names = ("ISOLATE", "INVENTORY", "ANALYZE", "REMEDIATE", "REPORT")
+        parts = []
+        for index, name in enumerate(names, 1):
+            marker = "●" if index == active else "✓" if index < active else "○"
+            parts.append(f"{marker} {index:02d} {name}")
+        self.phase_label.setText("   ·   ".join(parts))
 
     def apply_backend_state(self, state, detail=""):
         state_text = str(state or "UNKNOWN").upper()

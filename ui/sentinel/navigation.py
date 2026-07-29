@@ -77,7 +77,7 @@ class BottomNavigationBar(QFrame):
         self._collapsed=not self._collapsed; start=self.width(); end=self.COLLAPSED_WIDTH if self._collapsed else self.EXPANDED_WIDTH
         self._animation.stop(); self._animation=QParallelAnimationGroup(self)
         for prop in (b"minimumWidth",b"maximumWidth"):
-            anim=QPropertyAnimation(self,prop,self); anim.setDuration(260); anim.setStartValue(start); anim.setEndValue(end); anim.setEasingCurve(QEasingCurve.Type.OutCubic); self._animation.addAnimation(anim)
+            anim=QPropertyAnimation(self,prop,self); anim.setDuration(0 if theme_manager.reduced_motion else 260); anim.setStartValue(start); anim.setEndValue(end); anim.setEasingCurve(QEasingCurve.Type.OutCubic); self._animation.addAnimation(anim)
         self.brand.setText("US" if self._collapsed else "USB  SECURITY")
         self.brand_sub.setVisible(not self._collapsed); self.security_state.setText("●" if self._collapsed else "●  PROTECTED")
         self.version.setVisible(not self._collapsed)

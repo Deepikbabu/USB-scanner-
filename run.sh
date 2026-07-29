@@ -271,6 +271,18 @@ if [[ "${1:-}" == "--service-status" ]]; then
     exit $?
 fi
 
+if [[ "${1:-}" == "--production-acceptance" ]]; then
+    setup_python
+    as_root "$ROOT/.venv/bin/python3" "$ROOT/tools/pi_production_acceptance.py"
+    exit $?
+fi
+
+if [[ "${1:-}" == "--verify-audit" ]]; then
+    setup_python
+    as_root "$ROOT/.venv/bin/python3" "$ROOT/tools/verify_audit_log.py"
+    exit $?
+fi
+
 if [[ "${1:-}" == "--test-yara" ]]; then
     setup_python
     .venv/bin/python3 -c 'from backend.scanner.yara_engine import load_rules,last_load_error; assert load_rules(), last_load_error(); print("YARA READY")'

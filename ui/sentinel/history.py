@@ -1,10 +1,13 @@
 """Persisted incident history and security analytics."""
 import csv
+import json
+import shutil
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
-from PyQt6.QtCore import Qt, QUrl, QVariantAnimation, QEasingCurve
+from PyQt6.QtCore import QDate, Qt, QUrl, QVariantAnimation, QEasingCurve, pyqtSignal
 from PyQt6.QtGui import QBrush, QDesktopServices, QPainter, QPen
-from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QComboBox, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QDateEdit, QFileDialog, QHBoxLayout, QLineEdit, QComboBox, QTableWidgetItem, QVBoxLayout, QWidget
 from theme import theme_manager
 from widgets import AppButton, AppCard, AppTableWidget, EmptyState
 from asset_pages import KpiCard, PageHeader, label
@@ -33,6 +36,8 @@ class HistoryChart(QWidget):
 
 
 class HistoryPage(QWidget):
+    incident_selected = pyqtSignal(dict, dict)
+    report_preview_requested = pyqtSignal(dict)
     HEADERS=("Timestamp","Device","Final verdict","State","Risk","Incident ID","Report")
     def __init__(self,parent=None):
         super().__init__(parent); self._incidents=[]; self._visible=[]; self._reports={}; self._build_ui()
@@ -52,9 +57,16 @@ class HistoryPage(QWidget):
         self.search.textChanged.connect(self._apply_filters); controls.addWidget(self.search,1)
         self.verdict_filter=QComboBox(); self.verdict_filter.addItems(("All verdicts","CLEAN","TRUSTED","SUSPICIOUS","DANGEROUS","INCOMPLETE"))
         self.verdict_filter.currentTextChanged.connect(self._apply_filters); controls.addWidget(self.verdict_filter)
-        self.btn_export=AppButton("Export filtered CSV"); self.btn_export.clicked.connect(self.export_csv); controls.addWidget(self.btn_export); root.addLayout(controls)
+        self.date_from=QDateEdit(); self.date_from.setCalendarPopup(True); self.date_from.setDisplayFormat("dd MMM yyyy")
+        self.date_from.setDate(QDate.currentDate().addMonths(-1)); self.date_from.dateChanged.connect(self._apply_filters); controls.addWidget(self.date_from)
+        self.date_to=QDateEdit(); self.date_to.setCalendarPopup(True); self.date_to.setDisplayFormat("dd MMM yyyy")
+        self.date_to.setDate(QDate.currentDate()); self.date_to.dateChanged.connect(self._apply_filters); controls.addWidget(self.date_to)
+        self.btn_preview=AppButton("Preview"); self.btn_preview.clicked.connect(self.preview_selected); controls.addWidget(self.btn_preview)
+        self.btn_export_pdf=AppButton("Export PDF","primary"); self.btn_export_pdf.clicked.connect(self.export_selected_pdf); controls.addWidget(self.btn_export_pdf)
+        self.btn_export_json=AppButton("Export JSON"); self.btn_export_json.clicked.connect(self.export_selected_json); controls.addWidget(self.btn_export_json)
+        self.btn_export=AppButton("Export CSV"); self.btn_export.clicked.connect(self.export_csv); controls.addWidget(self.btn_export); root.addLayout(controls)
         self.table=AppTableWidget(0,len(self.HEADERS)); self.table.setHorizontalHeaderLabels(self.HEADERS); self.table.setSortingEnabled(True)
-        self.table.cellDoubleClicked.connect(self._open_row_report); root.addWidget(self.table,1)
+        self.table.cellDoubleClicked.connect(self._open_row_report); self.table.itemSelectionChanged.connect(self._update_action_state); root.addWidget(self.table,1)
         self.empty_state=EmptyState("No incident history","Completed backend incidents will appear after evidence is persisted.","◷"); root.addWidget(self.empty_state)
         self.lbl_status=label("0 incidents",muted=True,size=10); root.addWidget(self.lbl_status); self._render()
     @staticmethod
@@ -88,7 +100,14 @@ class HistoryPage(QWidget):
     def _apply_filters(self,*_):
         query=self.search.text().strip().casefold(); verdict=self.verdict_filter.currentText()
         self._visible=[item for item in self._incidents if (not query or query in " ".join(str(v) for v in item.values()).casefold())
-                       and (verdict=="All verdicts" or item["verdict"]==verdict)]; self._render()
+                       and (verdict=="All verdicts" or item["verdict"]==verdict)
+                       and self._within_date_range(item.get("updated"))]; self._render()
+    def _within_date_range(self,value):
+        try:
+            if isinstance(value,(int,float)) or str(value).replace(".","",1).isdigit():stamp=datetime.fromtimestamp(float(value)).date()
+            else:stamp=datetime.fromisoformat(str(value).replace("T"," ")[:19]).date()
+            return self.date_from.date().toPyDate()<=stamp<=self.date_to.date().toPyDate()
+        except (ValueError,TypeError,OSError):return True
     def _render(self):
         rows=self._visible; self.table.setSortingEnabled(False); self.table.setRowCount(len(rows))
         for row,item in enumerate(rows):
@@ -115,7 +134,32 @@ class HistoryPage(QWidget):
             for i in self._visible: writer.writerow((i["updated"],i["device_name"],i["verdict"],i["state"],i["risk"],i["incident_id"]))
     def _open_row_report(self,row,column):
         cell=self.table.item(row,0)
-        if cell:self.view_report(str(cell.data(Qt.ItemDataRole.UserRole)))
+        if cell:
+            incident_id=str(cell.data(Qt.ItemDataRole.UserRole))
+            incident=next((item for item in self._incidents if item["incident_id"]==incident_id),{})
+            self.incident_selected.emit(dict(incident),dict(self._reports.get(incident_id,{})))
+    def _selected_incident_id(self):
+        row=self.table.currentRow(); cell=self.table.item(row,0) if row>=0 else None
+        return str(cell.data(Qt.ItemDataRole.UserRole)) if cell else ""
+    def _selected_report(self):return dict(self._reports.get(self._selected_incident_id(),{}))
+    def _update_action_state(self):
+        selected=bool(self._selected_incident_id())
+        self.btn_preview.setEnabled(selected); self.btn_export_json.setEnabled(selected)
+        self.btn_export_pdf.setEnabled(selected and bool(self._selected_report().get("pdf_path")))
+    def preview_selected(self):
+        report=self._selected_report()
+        if report:self.report_preview_requested.emit(report)
+    def export_selected_json(self):
+        incident_id=self._selected_incident_id(); incident=next((i for i in self._incidents if i["incident_id"]==incident_id),{})
+        payload={**incident,**self._selected_report()}
+        if not payload:return
+        path,_=QFileDialog.getSaveFileName(self,"Export incident JSON",f"{incident_id}.json","JSON files (*.json)")
+        if path:Path(path).write_text(json.dumps(payload,indent=2,default=str)+"\n",encoding="utf-8")
+    def export_selected_pdf(self):
+        source=Path(str(self._selected_report().get("pdf_path") or ""))
+        if not source.is_file():return
+        path,_=QFileDialog.getSaveFileName(self,"Export incident PDF",source.name,"PDF files (*.pdf)")
+        if path:shutil.copy2(source,path)
     def view_report(self,incident_id):
         report=self._reports.get(str(incident_id),{}); path=report.get("pdf_path") or report.get("json_path")
         if path and Path(path).exists():QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).resolve())))

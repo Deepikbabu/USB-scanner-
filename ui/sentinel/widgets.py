@@ -1,9 +1,10 @@
+import hashlib
 import math
 from PyQt6.QtWidgets import (
     QFrame, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QTableWidget, QAbstractItemView,
+    QTableWidget, QAbstractItemView, QApplication, QMenu,
 )
-from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, QVariantAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QSettings, QTimer, QRectF, QPointF, QVariantAnimation, QEasingCurve
 from PyQt6.QtGui import QPainter, QPen, QBrush, QFont, QLinearGradient, QPainterPath, QColor
 from theme import theme_manager
 
@@ -231,6 +232,52 @@ class AppTableWidget(QTableWidget):
         self.verticalHeader().setVisible(False)
         self.verticalHeader().setDefaultSectionSize(44)
         self.horizontalHeader().setStretchLastSection(True)
+        self.horizontalHeader().setSectionsClickable(True)
+        self.horizontalHeader().setSectionsMovable(True)
+        self.horizontalHeader().setMinimumSectionSize(72)
+        self.setSortingEnabled(True)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._open_context_menu)
+        self.setAccessibleName("Data table")
+        self.setToolTip("Select a row. Click a heading to sort. Right-click to copy data.")
+        self._settings_key = None
+        self.horizontalHeader().sectionMoved.connect(self._save_header_state)
+        self.horizontalHeader().sectionResized.connect(self._save_header_state)
+        self.horizontalHeader().sortIndicatorChanged.connect(self._save_header_state)
+
+    def setHorizontalHeaderLabels(self, labels):
+        super().setHorizontalHeaderLabels(labels)
+        signature = "|".join(str(value) for value in labels)
+        self._settings_key = (
+            "tables/" + hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]
+        )
+        state = QSettings("BBBS", "USB Security Scanner").value(self._settings_key)
+        if state:
+            self.horizontalHeader().restoreState(state)
+
+    def _save_header_state(self, *_):
+        if self._settings_key:
+            QSettings("BBBS", "USB Security Scanner").setValue(
+                self._settings_key, self.horizontalHeader().saveState()
+            )
+
+    def _open_context_menu(self, position):
+        item = self.itemAt(position)
+        if item is None:
+            return
+        menu = QMenu(self)
+        copy_cell = menu.addAction("Copy cell")
+        copy_row = menu.addAction("Copy row")
+        selected = menu.exec(self.viewport().mapToGlobal(position))
+        if selected == copy_cell:
+            QApplication.clipboard().setText(item.text())
+        elif selected == copy_row:
+            values = [
+                self.item(item.row(), column).text()
+                if self.item(item.row(), column) else ""
+                for column in range(self.columnCount())
+            ]
+            QApplication.clipboard().setText("\t".join(values))
 
 
 class EmptyState(QFrame):

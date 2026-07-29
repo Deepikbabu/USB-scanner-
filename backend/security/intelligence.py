@@ -104,6 +104,12 @@ class SignedTrustStore:
         record, signature = wrapped.get("record"), wrapped.get("signature")
         if not isinstance(record, dict) or not hmac.compare_digest(str(signature), self._sign(record)):
             return None, "invalid_signature"
+        expires_at = record.get("expires_at")
+        try:
+            if expires_at is not None and float(expires_at) <= time.time():
+                return None, "expired"
+        except (TypeError, ValueError):
+            return None, "invalid_expiration"
         return record, "verified"
 
     def put(self, identity: str, record: dict[str, Any]) -> None:
