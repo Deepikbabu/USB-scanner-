@@ -4124,6 +4124,7 @@ def auto_install_clamav():
 # ==========================================
 if __name__ == "__main__":
     import sys
+    import signal
     
     # ── CLI Arguments ─────────────────────────────────────────────────────
     if "--ui-mode" in sys.argv:
@@ -4239,4 +4240,30 @@ if __name__ == "__main__":
     if not CLI_AUTO:
         hid_thread = threading.Thread(target=hid_monitor, daemon=True)
         hid_thread.start()
-    monitor_usb()
+    def _shutdown_signal(signum, _frame):
+        print(Colors.YELLOW + f"\n[!] Shutdown signal {signum} received; restoring safe USB input state…" + Colors.END)
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _shutdown_signal)
+    signal.signal(signal.SIGINT, _shutdown_signal)
+    try:
+        monitor_usb()
+    finally:
+        # Only restore pre-existing working or signed-trusted HID identities.
+        # Ports associated with an explicitly blocked session remain blocked.
+        from backend.scanner.usb_state_restore import restore_startup_state
+        dangerous_ports = {
+            str(port) for port, session in PORT_SESSIONS.items()
+            if session.get("blocked")
+        }
+        restoration = restore_startup_state(dangerous_ports)
+        publish_event("usb_state_restored", {
+            **restoration, "reason": "scanner backend shutdown",
+        })
+        print(
+            Colors.GREEN
+            + f"[SHUTDOWN] Restored HID: {restoration['restored']}; "
+              f"preserved blocked: {restoration['preserved_blocked']}; "
+              f"failed: {restoration['failed']}"
+            + Colors.END
+        )

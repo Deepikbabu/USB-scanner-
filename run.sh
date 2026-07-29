@@ -387,11 +387,24 @@ if [[ "${1:-}" == "--restore-quarantine" || "${1:-}" == "--delete-quarantine" ]]
 fi
 
 if [[ "${1:-}" == "--service-run" ]]; then
+    # Recover only eligible HID state left by an interrupted previous run,
+    # then capture the current baseline before this service mutates USB state.
+    "$ROOT/.venv/bin/python3" "$ROOT/tools/usb_state_admin.py" recover || true
+    "$ROOT/.venv/bin/python3" "$ROOT/tools/usb_state_admin.py" capture
     cleanup_stale_isolation
     reconcile_usbguard_state
     verify_usbguard_enforcement
     export PYTHONPATH="$ROOT"
     exec "$ROOT/.venv/bin/python3" "$ROOT/changed.py" --cli-auto
+fi
+
+if [[ "${1:-}" == "--stop-and-restore" ]]; then
+    setup_python
+    as_root systemctl stop usb-scanner.service
+    as_root "$ROOT/.venv/bin/python3" "$ROOT/tools/usb_state_admin.py" restore
+    as_root "$ROOT/.venv/bin/python3" "$ROOT/tools/hid_trust.py" recover || true
+    log "[+] Scanner stopped. Eligible pre-existing and signed-trusted HID state restored."
+    exit 0
 fi
 
 if [[ "${1:-}" == "--check" ]]; then

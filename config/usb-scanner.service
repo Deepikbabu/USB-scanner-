@@ -10,6 +10,7 @@ StartLimitBurst=10
 Type=simple
 WorkingDirectory=__PROJECT_ROOT__
 ExecStart=__PROJECT_ROOT__/run.sh --service-run
+ExecStopPost=__PROJECT_ROOT__/.venv/bin/python3 __PROJECT_ROOT__/tools/usb_state_admin.py restore
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=15
