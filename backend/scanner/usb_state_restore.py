@@ -118,6 +118,27 @@ def _same_device(saved: dict[str, Any], current: dict[str, Any]) -> bool:
     return sorted(saved.get("interfaces") or []) == sorted(current.get("interfaces") or [])
 
 
+def is_preexisting_working_hid(current: dict[str, Any]) -> bool:
+    """Return true only for the exact HID captured as working at startup.
+
+    This is a session-scoped continuity safeguard, not permanent trust. It
+    prevents the scanner from disabling the physical console mouse/keyboard
+    because a whitelist file is missing, while refusing changed fingerprints
+    and devices connected after enforcement began.
+    """
+    if "03" not in {str(value).lower() for value in current.get("interfaces") or []}:
+        return False
+    try:
+        payload = json.loads(state_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return any(
+        entry.get("was_working") is True and _same_device(entry, current)
+        for entry in payload.get("hid_devices") or []
+        if isinstance(entry, dict)
+    )
+
+
 def _signed_trust_verified(device: dict[str, Any]) -> bool:
     record, status = SignedTrustStore().get(f"hid:{device.get('vid_pid')}")
     if status != "verified" or not record:

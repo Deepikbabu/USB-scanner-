@@ -58,6 +58,16 @@ class USBStateRestoreTests(unittest.TestCase):
         self.assertEqual(result["preserved_blocked"], ["046d:c077"])
         guard.assert_not_called()
 
+    def test_exact_startup_hid_is_protected_for_runtime_continuity(self):
+        with patch.object(restore, "state_path", return_value=ARTIFACT):
+            self.assertTrue(restore.is_preexisting_working_hid(device()))
+
+    def test_changed_runtime_hid_is_not_protected(self):
+        with patch.object(restore, "state_path", return_value=ARTIFACT):
+            self.assertFalse(
+                restore.is_preexisting_working_hid(device(digest="attacker-hash"))
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

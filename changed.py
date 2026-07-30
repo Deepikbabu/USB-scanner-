@@ -2673,6 +2673,24 @@ def handle_usb_device(device):
             usb_info["port_session"] = dict(session)
             is_guard_hid = "03" in guard["interfaces"]
             is_guard_storage = "08" in guard["interfaces"]
+            startup_working_hid = False
+            if is_guard_hid and not is_guard_storage:
+                try:
+                    from backend.scanner.usb_state_restore import is_preexisting_working_hid
+                    startup_working_hid = is_preexisting_working_hid({
+                        "usbguard_id": guard.get("id"),
+                        "state": guard.get("state", ""),
+                        "vid": usb_info.get("vid", ""),
+                        "pid": usb_info.get("pid", ""),
+                        "vid_pid": vid_pid,
+                        "serial": usb_info.get("serial", ""),
+                        "name": usb_info.get("model", ""),
+                        "port": physical_port,
+                        "hash": guard.get("hash", ""),
+                        "interfaces": guard.get("interfaces", []),
+                    })
+                except (OSError, ValueError, TypeError):
+                    startup_working_hid = False
             early_type = detect_actual_device_type(device, usb_info)
             set_device_state(device_id, "CLASSIFIED", early_type)
             emit_ui_event("scan_progress", {
@@ -2698,7 +2716,7 @@ def handle_usb_device(device):
                                          "Composite device exposes HID and storage", risk=20)
                 set_device_state(device_id, "BLOCKED", "composite HID + storage")
                 return
-            if is_guard_hid and vid_pid not in HID_WHITELIST:
+            if is_guard_hid and vid_pid not in HID_WHITELIST and not startup_working_hid:
                 usbguard_set_state(guard["id"], False)
                 print(Colors.RED + Colors.BOLD +
                       f"\n[BLOCKED BEFORE DRIVER BIND] Unknown HID {vid_pid}" + Colors.END)
@@ -2715,6 +2733,15 @@ def handle_usb_device(device):
                                      daemon=True).start()
                 set_device_state(device_id, "BLOCKED", "unknown HID")
                 return
+            if startup_working_hid and vid_pid not in HID_WHITELIST:
+                if not usbguard_set_state(guard["id"], True):
+                    print(Colors.RED + "[!] Could not preserve startup console input." + Colors.END)
+                    set_device_state(device_id, "BLOCKED", "startup HID authorization failed")
+                    return
+                print(Colors.GREEN +
+                      f"[+] Preserved exact pre-existing console input for this session: {vid_pid}" +
+                      Colors.END)
+                flags.append("Exact pre-existing working HID preserved for console continuity")
             if is_guard_hid and vid_pid in HID_WHITELIST:
                 trust_store = SignedTrustStore()
                 identity = f"hid:{vid_pid}"
