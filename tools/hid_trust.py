@@ -148,6 +148,54 @@ def trust() -> int:
     return 0
 
 
+def enroll_baseline() -> int:
+    """Enroll HID devices already working at installation time.
+
+    This is deliberately interactive and is never run during ordinary service
+    startup. Physical-console confirmation establishes the trusted input
+    baseline without teaching the runtime scanner to allow arbitrary HID.
+    """
+    items = [
+        item for item in parse_devices()
+        if item["state"] in {"allow", "allowed"}
+        and sysfs_authorized(str(item.get("port", ""))) is not False
+    ]
+    if not items:
+        print("No currently working HID devices are available for baseline enrollment.")
+        return 0
+    print("\nINPUT DEVICE BASELINE\n=====================")
+    print("Disconnect every untrusted keyboard, mouse, receiver, and composite device.")
+    for item in items:
+        print(f"  {item['vid_pid']}  {item['name']}  port={item['port'] or 'unknown'}")
+    if input("\nType BASELINE to trust exactly these connected input devices: ").strip() != "BASELINE":
+        print("Baseline enrollment skipped. Unknown HID devices will remain blocked.")
+        return 0
+    whitelist = load_whitelist()
+    store = SignedTrustStore()
+    for item in items:
+        permanent_allow(str(item["usbguard_id"]))
+        vid_pid = str(item["vid_pid"])
+        whitelist[vid_pid] = str(item["name"])
+        vid, pid = vid_pid.split(":", 1)
+        info = {
+            "vid": vid, "pid": pid, "serial": item["serial"] or "Unknown",
+            "vendor": "Unknown", "model": item["name"],
+            "usbguard_hash": item["hash"],
+        }
+        store.put(f"hid:{vid_pid}", {
+            "kind": "hid", "vid_pid": vid_pid, "name": item["name"],
+            "hardware_fingerprint": hardware_fingerprint(info, item["interfaces"]),
+            "interface_fingerprint": interface_fingerprint(item["interfaces"]),
+            "identity_fingerprint": device_identity_fingerprint(info, item["interfaces"]),
+            "identity_quality": identity_quality(info, item["interfaces"]),
+            "enrolled_at": __import__("datetime").datetime.now().isoformat(),
+            "enrollment_source": "physical-install-baseline",
+        })
+    save_whitelist(whitelist)
+    print(f"[OK] Enrolled {len(items)} verified startup input device(s).")
+    return 0
+
+
 def remove_matching_rules(vid_pid: str) -> None:
     result = run("usbguard", "list-rules")
     for line in result.stdout.splitlines():
@@ -272,11 +320,12 @@ def main() -> int:
         return 2
     action = sys.argv[1] if len(sys.argv) > 1 else "list"
     actions = {"list": list_hid, "trust": trust, "approve": trust,
+               "baseline": enroll_baseline,
                "untrust": untrust, "revoke": untrust,
                "repair": repair, "recover": repair, "rescan": rescan,
                "rollback": rollback}
     if action not in actions:
-        print("Usage: hid_trust.py [list|approve|revoke|rescan|repair|recover|rollback]", file=sys.stderr)
+        print("Usage: hid_trust.py [list|approve|baseline|revoke|rescan|repair|recover|rollback]", file=sys.stderr)
         return 2
     return actions[action]()
 

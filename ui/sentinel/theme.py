@@ -5,53 +5,53 @@ from PyQt6.QtGui import QColor, QFontDatabase
 
 
 COLORS_DARK = {
-    "bg": "#07131F",
-    "surface": "#0B1B2A",
-    "surface_raised": "#102438",
-    "surface_hover": "#142C42",
-    "glass_bg": "#0B1B2A",
-    "glass_border": "#1D3850",
-    "border": "#1D3850",
-    "accent": "#159EEA",
-    "accent_hover": "#28B4FF",
-    "accent_soft": "rgba(21, 158, 234, 0.14)",
-    "text_primary": "#F3F7FB",
-    "text_secondary": "#9DB0C2",
-    "text_muted": "#6F8498",
-    "success": "#46D37B",
-    "warning": "#FFB82E",
-    "danger": "#FF5D63",
-    "info": "#35BDF2",
-    "btn_bg": "#102B43",
-    "btn_hover": "#163B59",
-    "table_alt": "#0E2031",
+    "bg": "#0B0908",
+    "surface": "#161210",
+    "surface_raised": "#1F1916",
+    "surface_hover": "#2A211C",
+    "glass_bg": "#161210",
+    "glass_border": "#33271F",
+    "border": "#33271F",
+    "accent": "#E2611C",
+    "accent_hover": "#F0873C",
+    "accent_soft": "rgba(226, 97, 28, 0.16)",
+    "text_primary": "#F5EEE7",
+    "text_secondary": "#AC9C8D",
+    "text_muted": "#6E6053",
+    "success": "#6FA85E",
+    "warning": "#E0A430",
+    "danger": "#D6503C",
+    "info": "#F0873C",
+    "btn_bg": "#1F1916",
+    "btn_hover": "#2A211C",
+    "table_alt": "#1B1613",
 }
 
 COLORS_LIGHT = {
-    "bg": "#F3F7FA",
+    "bg": "#FAF6F2",
     "surface": "#FFFFFF",
-    "surface_raised": "#F8FBFD",
-    "surface_hover": "#EDF5FA",
+    "surface_raised": "#F3EBE3",
+    "surface_hover": "#ECE0D4",
     "glass_bg": "#FFFFFF",
-    "glass_border": "#CCDCE7",
-    "border": "#CCDCE7",
-    "accent": "#087DC1",
-    "accent_hover": "#056BA6",
-    "accent_soft": "rgba(8, 125, 193, 0.12)",
-    "text_primary": "#102334",
-    "text_secondary": "#52687A",
-    "text_muted": "#718596",
-    "success": "#168B4E",
-    "warning": "#B66B00",
-    "danger": "#D63742",
-    "info": "#087DC1",
-    "btn_bg": "#E7F1F7",
-    "btn_hover": "#D8EAF4",
-    "table_alt": "#F5F9FC",
+    "glass_border": "#E7D9C9",
+    "border": "#E7D9C9",
+    "accent": "#C24E14",
+    "accent_hover": "#A5410F",
+    "accent_soft": "rgba(194, 78, 20, 0.13)",
+    "text_primary": "#221A14",
+    "text_secondary": "#7A6C5C",
+    "text_muted": "#A5947F",
+    "success": "#3E7A34",
+    "warning": "#9C6C10",
+    "danger": "#B03A28",
+    "info": "#C24E14",
+    "btn_bg": "#F3EBE3",
+    "btn_hover": "#ECE0D4",
+    "table_alt": "#FCF8F4",
 }
 
 SPACING = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24, "xxl": 32}
-RADIUS = {"sm": 6, "md": 9, "lg": 12}
+RADIUS = {"sm": 9, "md": 12, "lg": 16}
 
 
 class ThemeManager(QObject):
@@ -121,7 +121,7 @@ class ThemeManager(QObject):
         c = self.colors
         available = set(QFontDatabase.families())
         font_family = next(
-            (name for name in ("Inter", "Segoe UI", "DejaVu Sans", "Arial", "Sans Serif")
+            (name for name in ("Manrope", "Inter", "Segoe UI", "DejaVu Sans", "Arial", "Sans Serif")
              if name in available),
             "Sans Serif",
         )
@@ -140,6 +140,7 @@ class ThemeManager(QObject):
             background-color: {c['bg']};
             color: {c['text_primary']};
         }}
+        QStackedWidget {{ background: transparent; }}
         QLabel {{ color: {c['text_primary']}; background: transparent; }}
         QLabel[muted="true"] {{ color: {c['text_secondary']}; }}
         QFrame#appCard, QFrame#glassCard {{
@@ -161,7 +162,7 @@ class ThemeManager(QObject):
         QPushButton:pressed {{ background-color: {c['accent_soft']}; }}
         QPushButton:disabled {{ color: {c['text_muted']}; background-color: {c['surface']}; }}
         QPushButton[variant="primary"] {{
-            color: white; background-color: {c['accent']}; border-color: {c['accent']};
+            color: #170C06; background-color: {c['accent']}; border-color: {c['accent']};
         }}
         QPushButton[variant="primary"]:hover {{ background-color: {c['accent_hover']}; }}
         QPushButton[variant="danger"] {{

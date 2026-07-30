@@ -67,6 +67,19 @@ sudo ./run.sh --install-service
 ./run.sh --dashboard
 ```
 
+During installation, disconnect untrusted USB input devices and type
+`BASELINE` when prompted. The installer signs the mouse, keyboard, and receiver
+devices already working at the physical console. Unknown HID devices remain
+blocked. The baseline can be refreshed explicitly with:
+
+```bash
+sudo ./run.sh --enroll-input-baseline
+```
+
+Settings → Scanner Health displays the backend build ID and absolute project
+path. A version/path mismatch means the systemd service must be reinstalled
+from the same checkout before scanning.
+
 The Overview, Scan, History, and Settings pages consume live and persisted
 events through `/run/usb-scanner/backend.sock`. Device detection, lifecycle
 state, YARA/ClamAV progress, findings, risk, reports, quarantine and email

@@ -471,7 +471,8 @@ class MainWindow(QMainWindow):
             self.page_quarantine.apply_backend_resources(snapshot.get("resources", {}))
         if hasattr(self.page_settings, "apply_backend_status"):
             self.page_settings.apply_backend_status(
-                snapshot.get("system_status", {}), snapshot.get("resources", {})
+                snapshot.get("system_status", {}), snapshot.get("resources", {}),
+                snapshot.get("runtime", {}),
             )
         self.page_dashboard.apply_readiness(snapshot.get("system_status", {}))
         self.page_trust.apply_backend_resources(snapshot.get("resources", {}))
@@ -513,7 +514,6 @@ class MainWindow(QMainWindow):
             self.page_device_details.apply_backend_device(device)
             self.page_scan.begin_backend_scan(device)
             self.shell.begin_scan(device.get("name"))
-            self.shell.inspect_device(device)
             self.shell.add_evidence_event("Device detected", device.get("port", ""))
             self.shell.show_toast(
                 f"{device.get('name', 'USB device')} detected · analysis started",

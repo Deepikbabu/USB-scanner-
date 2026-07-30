@@ -14,13 +14,14 @@ import sys
 from collections import deque
 from pathlib import Path
 from typing import Any
+from backend.build_info import IPC_PROTOCOL_VERSION, runtime_identity
 
 try:
     import grp
 except ImportError:  # Allows protocol tests on non-Linux development hosts.
     grp = None
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = IPC_PROTOCOL_VERSION
 DEFAULT_SOCKET = Path(os.environ.get("USB_SCANNER_SOCKET", "/run/usb-scanner/backend.sock"))
 STATE_ROOT = Path(os.environ.get("USB_SCANNER_STATE_DIR", "/var/lib/usb-scanner"))
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -96,7 +97,9 @@ class IPCServer:
             return
         self.server_socket, self.running = server, True
         threading.Thread(target=self._accept_loop, daemon=True, name="dashboard-ipc").start()
-        self.publish("backend_connection", {"status": "ONLINE", "socket": str(self.socket_path)})
+        self.publish("backend_connection", {
+            "status": "ONLINE", "socket": str(self.socket_path), **runtime_identity(),
+        })
 
     def _accept_loop(self) -> None:
         while self.running and self.server_socket:
@@ -380,7 +383,8 @@ class IPCServer:
         return payload
 
     def snapshot(self) -> dict[str, Any]:
-        return {"protocol": 1, "backend": "ONLINE", "system_status": self.system_status,
+        return {"protocol": PROTOCOL_VERSION, "backend": "ONLINE",
+                "runtime": runtime_identity(), "system_status": self.system_status,
                 "active_incidents": list(self.active.values()),
                 "pending_actions": list(self.pending_actions.values()),
                 "recent_events": list(self.recent), "resources": self._resources(),

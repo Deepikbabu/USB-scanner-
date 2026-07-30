@@ -77,21 +77,25 @@ class ApplicationShell(QWidget):
         self.setObjectName("appRoot")
         self.page_stack = page_stack
         self._auto_collapsed = False
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
         self.navigation = BottomNavigationBar(self)
-        root.addWidget(self.navigation)
 
         content = QWidget(self)
         content.setObjectName("shellContent")
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(18, 0, 18, 18)
+        content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
         content_layout.addWidget(self._build_top_bar())
         content_layout.addWidget(self._build_scan_strip())
-        content_layout.addWidget(page_stack, 1)
+        page_host = QWidget(content)
+        page_host.setObjectName("pageHost")
+        page_layout = QVBoxLayout(page_host)
+        page_layout.setContentsMargins(26, 18, 26, 20)
+        page_layout.addWidget(page_stack)
+        content_layout.addWidget(page_host, 1)
         root.addWidget(content, 1)
         self.operations_drawer = OperationsDrawer(self)
         self.operations_drawer.hide()
@@ -99,7 +103,7 @@ class ApplicationShell(QWidget):
             lambda: self.navigation.set_active_tab(4)
         )
         self.operations_drawer.notifications_read.connect(self.mark_notifications_read)
-        root.addWidget(self.operations_drawer)
+        self.operations_drawer.setParent(self)
         self._settings = QSettings("BBBS", "USB Security Scanner")
         try:
             self._notifications = json.loads(
@@ -121,15 +125,20 @@ class ApplicationShell(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        compact = self.width() < 1120
+        compact = self.width() < 1080
         if compact and not self.navigation.collapsed:
             self.navigation.toggle_collapsed()
             self._auto_collapsed = True
-        elif self.width() >= 1240 and self._auto_collapsed and self.navigation.collapsed:
+        elif self.width() >= 1180 and self._auto_collapsed and self.navigation.collapsed:
             self.navigation.toggle_collapsed()
             self._auto_collapsed = False
         self.section_label.setVisible(self.width() >= 920)
         self.connection_text.setVisible(self.width() >= 820)
+        if hasattr(self, "operations_drawer"):
+            self.operations_drawer.setGeometry(
+                max(0, self.width() - 350), 60, 350, max(0, self.height() - 60)
+            )
+            self.operations_drawer.raise_()
         self._position_toast()
 
     def _position_toast(self):
@@ -147,23 +156,32 @@ class ApplicationShell(QWidget):
     def _build_top_bar(self):
         bar = QFrame(self)
         bar.setObjectName("topBar")
-        bar.setFixedHeight(66)
+        bar.setFixedHeight(60)
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setContentsMargins(26, 0, 26, 0)
+        self.brand_glyph = QLabel("US")
+        self.brand_glyph.setObjectName("brandGlyph")
+        self.brand_glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.brand_glyph.setFixedSize(26, 26)
+        self.brand_text = QLabel("USB Sentinel")
+        self.brand_text.setObjectName("brandText")
         self.page_title = QLabel("Dashboard")
         self.page_title.setObjectName("pageTitle")
+        self.page_title.hide()
         self.menu_button = QPushButton("☰")
         self.menu_button.setProperty("variant", "ghost")
         self.menu_button.setFixedSize(36, 36)
         self.menu_button.setToolTip("Collapse or expand navigation (F10)")
         self.menu_button.setAccessibleName("Toggle navigation sidebar")
         self.menu_button.clicked.connect(self.navigation.toggle_collapsed)
-        layout.addWidget(self.menu_button)
-        layout.addWidget(self.page_title)
+        self.menu_button.hide()
+        layout.addWidget(self.brand_glyph)
+        layout.addWidget(self.brand_text)
+        layout.addSpacing(12)
+        layout.addWidget(self.navigation, 1)
         self.section_label = QLabel(" / SECURITY OPERATIONS")
         self.section_label.setObjectName("sectionLabel")
-        layout.addWidget(self.section_label)
-        layout.addStretch(1)
+        self.section_label.hide()
         self.connection_dot = QLabel("●")
         self.connection_dot.setObjectName("connectionDot")
         self.connection_text = QLabel("Backend connecting")
@@ -171,7 +189,7 @@ class ApplicationShell(QWidget):
         layout.addWidget(self.connection_dot)
         layout.addWidget(self.connection_text)
         self.theme_button = QPushButton(
-            "Light mode" if theme_manager.current_theme == "dark" else "Dark mode"
+            "Light" if theme_manager.current_theme == "dark" else "Dark"
         )
         self.theme_button.setProperty("variant", "ghost")
         self.theme_button.setToolTip("Switch application theme")
@@ -267,7 +285,11 @@ class ApplicationShell(QWidget):
         )
 
     def inspect_device(self, device, risk_data=None):
+        self.operations_drawer.setGeometry(
+            max(0, self.width() - 350), 60, 350, max(0, self.height() - 60)
+        )
         self.operations_drawer.open_device(device, risk_data)
+        self.operations_drawer.raise_()
 
     def add_evidence_event(self, title, detail=""):
         self.operations_drawer.add_event(title, detail)
@@ -290,11 +312,15 @@ class ApplicationShell(QWidget):
         c = theme_manager.colors
         if hasattr(self, "theme_button"):
             self.theme_button.setText(
-                "Light mode" if theme_manager.current_theme == "dark" else "Dark mode"
+                "Light" if theme_manager.current_theme == "dark" else "Dark"
             )
         self.setStyleSheet(f"""
             QWidget#shellContent {{ background: {c['bg']}; }}
-            QFrame#topBar {{ background: transparent; border: 0; }}
+            QFrame#topBar {{ background: {c['surface']}; border: 0;
+                              border-bottom: 1px solid {c['border']}; }}
+            QLabel#brandGlyph {{ color:#170C06; background:{c['accent']};
+                                border-radius:7px;font-size:10px;font-weight:900; }}
+            QLabel#brandText {{ color:{c['text_primary']};font-size:14px;font-weight:800; }}
             QLabel#pageTitle {{ color: {c['text_primary']}; font-size: 20px; font-weight: 800; }}
             QLabel#sectionLabel {{ color: {c['text_muted']}; font-size: 9px; font-weight: 700; }}
             QLabel#connectionDot {{ color: {c['warning']}; font-size: 13px; }}

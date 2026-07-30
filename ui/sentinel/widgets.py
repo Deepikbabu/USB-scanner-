@@ -169,7 +169,7 @@ class GlassProgressBar(QWidget):
                 
                 gradient = QLinearGradient(0, 0, rect.width(), 0)
                 gradient.setColorAt(0, accent)
-                gradient.setColorAt(1, QColor(0, 229, 255, 200) if theme_manager.current_theme == "dark" else QColor(0, 180, 216, 200))
+                gradient.setColorAt(1, QColor(theme_manager.get_color("accent_hover")))
                 
                 painter.setBrush(QBrush(gradient))
                 painter.drawRoundedRect(fill_rect, 4.0, 4.0)

@@ -135,6 +135,8 @@ install_service() {
     local source="$ROOT/config/usb-scanner.service" failure_source="$ROOT/config/usb-scanner-failure.service" tmp
     [[ -f "$source" ]] || die "Service template is missing."
     [[ -f "$failure_source" ]] || die "Service failure template is missing."
+    log "[*] Establishing the physical-console mouse/keyboard baseline."
+    as_root "$ROOT/.venv/bin/python3" "$ROOT/tools/hid_trust.py" baseline
     as_root groupadd --force usb-scanner
     local desktop_user="${SUDO_USER:-${USER:-pi}}"
     [[ "$desktop_user" == "root" ]] || as_root usermod -a -G usb-scanner "$desktop_user"
@@ -231,6 +233,7 @@ if [[ "${1:-}" == "--dashboard" ]]; then
 fi
 
 if [[ "${1:-}" == "--list-hid" || "${1:-}" == "--trust-hid" || \
+      "${1:-}" == "--enroll-input-baseline" || \
       "${1:-}" == "--untrust-hid" || "${1:-}" == "--repair-input" || \
       "${1:-}" == "--recover-hid" || \
       "${1:-}" == "--approve-hid" || "${1:-}" == "--revoke-hid" || \
@@ -241,6 +244,7 @@ if [[ "${1:-}" == "--list-hid" || "${1:-}" == "--trust-hid" || \
     case "$1" in
         --list-hid) action=list ;;
         --trust-hid) action=trust ;;
+        --enroll-input-baseline) action=baseline ;;
         --untrust-hid) action=untrust ;;
         --repair-input) action=repair ;;
         --recover-hid) action=recover ;;

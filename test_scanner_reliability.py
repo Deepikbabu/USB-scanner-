@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from backend.security.intelligence import (SignedTrustStore, canonical_hash,
                                             device_identity_fingerprint, identity_quality,
@@ -48,6 +49,12 @@ class ReliabilityContractTests(unittest.TestCase):
         response = server._command({"protocol": 1, "request_id": "test", "command": "ping", "data": {}})
         self.assertEqual(response["status"], "ok")
         self.assertEqual(response["data"]["status"], "ONLINE")
+
+    def test_snapshot_exposes_runtime_identity(self) -> None:
+        snapshot = IPCServer().snapshot()
+        self.assertEqual(snapshot["runtime"]["api_schema_version"], 2)
+        self.assertTrue(snapshot["runtime"]["build_id"])
+        self.assertTrue(snapshot["runtime"]["project_root"])
 
     def test_lifecycle_detects_reenumeration_and_lock(self) -> None:
         registry = LifecycleRegistry()
@@ -97,6 +104,42 @@ class ProductionScannerAvailabilityTests(unittest.TestCase):
             import changed  # noqa: F401
         except ImportError as exc:
             self.skipTest(f"Linux scanner dependency unavailable: {exc}")
+
+    def test_verified_empty_filesystem_has_complete_coverage(self) -> None:
+        try:
+            import changed
+        except ImportError as exc:
+            self.skipTest(f"Linux scanner dependency unavailable: {exc}")
+        mount = "/verified-empty-volume"
+        with patch.object(changed.os, "walk", return_value=iter([(mount, [], [])])), \
+                patch.object(changed.os.path, "isdir", return_value=True), \
+                patch.object(changed.os, "access", return_value=True):
+            device = {}
+            risk, malware, *_ = changed.scan_storage(mount, device)
+        self.assertEqual(risk, 0)
+        self.assertFalse(malware)
+        self.assertFalse(device["scan_coverage"]["incomplete"])
+        self.assertTrue(device["scan_coverage"]["empty_filesystem_verified"])
+
+    def test_directory_enumeration_error_is_fail_closed(self) -> None:
+        try:
+            import changed
+        except ImportError as exc:
+            self.skipTest(f"Linux scanner dependency unavailable: {exc}")
+
+        def failed_walk(_path, onerror=None):
+            if onerror:
+                onerror(PermissionError("denied"))
+            return iter(())
+
+        device = {}
+        mount = "/unreadable-volume"
+        with patch.object(changed.os, "walk", side_effect=failed_walk):
+            risk, malware, *_ = changed.scan_storage(mount, device)
+        self.assertGreaterEqual(risk, 15)
+        self.assertFalse(malware)
+        self.assertTrue(device["scan_coverage"]["incomplete"])
+        self.assertFalse(device["scan_coverage"]["enumeration_complete"])
 
 
 if __name__ == "__main__":

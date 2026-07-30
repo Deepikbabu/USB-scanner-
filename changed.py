@@ -365,6 +365,7 @@ def save_storage_whitelist():
         return False
 
 def trust_storage_device(vid_pid, usb_info, fingerprint, file_hashes):
+    coverage = dict(usb_info.get("scan_coverage") or {})
     record = {
         "label": f"{usb_info.get('vendor', 'Unknown')} {usb_info.get('model', 'USB Device')}",
         "serial": usb_info.get("serial", "Unknown"),
@@ -375,6 +376,14 @@ def trust_storage_device(vid_pid, usb_info, fingerprint, file_hashes):
         "hardware_fingerprint": usb_info.get("hardware_fingerprint"),
         "interface_fingerprint": usb_info.get("interface_fingerprint"),
         "engine_signature": scan_engine_signature(),
+        "verified_clean": bool(
+            not coverage.get("incomplete")
+            and coverage.get("enumeration_complete") is True
+        ),
+        "coverage_complete": bool(
+            not coverage.get("incomplete")
+            and coverage.get("enumeration_complete") is True
+        ),
     }
     STORAGE_WHITELIST[vid_pid] = record
     if not save_storage_whitelist():
@@ -1605,6 +1614,9 @@ def scan_file_task_incremental(path, previous_sha=None, cache_valid=False, cance
     if cancel_event and cancel_event.is_set():
         raise DeviceRemovedDuringAnalysis("DEVICE REMOVED DURING ANALYSIS")
     sha = calculate_sha256(path)
+    # Cache reuse is permitted only for records created by a complete scan and
+    # explicitly carrying a verified-clean verdict. Older hash-only records
+    # cannot prove that scanner engines actually inspected the file.
     if cache_valid and previous_sha and sha == previous_sha:
         return path, [], sha, True
     result_path, findings, result_sha = scan_file_task(path, cancel_event=cancel_event)
@@ -1627,11 +1639,20 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
         item.get("relative_path"): item.get("sha256")
         for item in (previous_entry or {}).get("file_hashes", []) if isinstance(item, dict)
     }
-    cache_valid = bool(previous_entry and not previous_entry.get("force_rescan") and
-                       previous_entry.get("engine_signature") == scan_engine_signature())
+    cache_valid = bool(
+        previous_entry
+        and previous_entry.get("verified_clean") is True
+        and previous_entry.get("coverage_complete") is True
+        and not previous_entry.get("force_rescan")
+        and previous_entry.get("engine_signature") == scan_engine_signature()
+    )
+    enumeration_errors = []
     
     try:
-        for root, dirs, files in os.walk(mount_path):
+        def record_walk_error(error):
+            enumeration_errors.append(str(error))
+
+        for root, dirs, files in os.walk(mount_path, onerror=record_walk_error):
             if cancel_event and cancel_event.is_set():
                 raise DeviceRemovedDuringAnalysis("DEVICE REMOVED DURING ANALYSIS")
             folder_count += len(dirs)
@@ -1640,6 +1661,7 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
     except DeviceRemovedDuringAnalysis:
         raise
     except Exception as e:
+        enumeration_errors.append(str(e))
         print(f"Directory read error: {e}")
         
     log_file = os.path.join(os.path.dirname(__file__), "scan_log.json")
@@ -1787,7 +1809,25 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
         coverage["cache_reuse_allowed"] = cache_valid
         coverage["timed_out_files"] = coverage.get("timed_out_files", 0) + timed_out_files
         coverage["failed_files"] = coverage.get("failed_files", 0) + failed_files
-        coverage["incomplete"] = bool(coverage["timed_out_files"] or coverage["failed_files"])
+        coverage["enumeration_errors"] = (
+            list(coverage.get("enumeration_errors") or []) + enumeration_errors
+        )
+        coverage["enumeration_complete"] = not bool(coverage["enumeration_errors"])
+        coverage["empty_filesystem_verified"] = bool(
+            total_files == 0 and coverage["enumeration_complete"]
+            and os.path.isdir(mount_path) and os.access(mount_path, os.R_OK)
+        )
+        coverage["incomplete"] = bool(
+            coverage["timed_out_files"]
+            or coverage["failed_files"]
+            or not coverage["enumeration_complete"]
+        )
+        if coverage["incomplete"]:
+            # Coverage failures are operational failures, not malware, but
+            # carry enough policy risk to prevent an ALLOWED/CLEAN result.
+            master_risk_score += 15
+            for error in enumeration_errors:
+                print(Colors.RED + f"[!] Scan coverage incomplete: {error}" + Colors.END)
     return master_risk_score, malware_detected, malicious_files, storage_fingerprint, file_hashes
 
 # ==========================================
@@ -3215,7 +3255,27 @@ def handle_usb_device(device):
             safe_to_use = (hid_risk == 0 and base_risk < 8)
         else:
             # If the fingerprint changed, trusted_storage is False, so it falls back to checking the scan results!
-            safe_to_use = sanitized or trusted_storage or (bool(scanned_paths) and not malware_detected and storage_risk == 0)
+            coverage = usb_info.get("scan_coverage", {})
+            coverage_complete = bool(
+                coverage
+                and not coverage.get("incomplete")
+                and coverage.get("enumeration_complete") is True
+                and (
+                    coverage.get("total_files", 0) > 0
+                    or coverage.get("empty_filesystem_verified") is True
+                )
+            )
+            engines_ready = bool(antivirus_available and yara_available)
+            safe_to_use = bool(
+                sanitized
+                or (
+                    coverage_complete
+                    and engines_ready
+                    and not malware_detected
+                    and storage_risk == 0
+                    and (trusted_storage or bool(scanned_paths))
+                )
+            )
             
         if safe_to_use:
             alert_device_clean(usb_info.get('model', 'USB Device'))
@@ -3306,6 +3366,10 @@ def handle_usb_device(device):
                 reason_parts.append(f"storage risk score = {storage_risk}")
             if not scanned_paths:
                 reason_parts.append("no partitions could be scanned")
+            if usb_info.get("scan_coverage", {}).get("incomplete"):
+                reason_parts.append("scan coverage is incomplete")
+            if not antivirus_available or not yara_available:
+                reason_parts.append("required scanner engine unavailable")
             if storage_trust_invalidated:
                 reason_parts.append("stored fingerprint changed")
             reason_str = ", ".join(reason_parts) if reason_parts else "unknown"
@@ -3337,6 +3401,14 @@ def handle_usb_device(device):
         # threat was found, never "threat found and remediated".
         verdict = normalized_verdict(
             allowed=safe_to_use, trusted=trusted_storage,
+            incomplete=bool(
+                has_storage and (
+                    usb_info.get("scan_coverage", {}).get("incomplete")
+                    or not antivirus_available
+                    or not yara_available
+                    or not scanned_paths
+                )
+            ),
             malware=original_malware_detected, total_risk=total_risk,
             remediated=sanitized,
         )

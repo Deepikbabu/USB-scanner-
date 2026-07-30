@@ -11,6 +11,7 @@ import time
 import uuid
 
 from PyQt6.QtCore import QObject, pyqtSignal
+from backend.build_info import IPC_PROTOCOL_VERSION
 
 
 class BackendClient(QObject):
@@ -46,7 +47,7 @@ class BackendClient(QObject):
                 pass
 
     def command(self, command, data=None):
-        frame = {"protocol": 1, "request_id": uuid.uuid4().hex,
+        frame = {"protocol": IPC_PROTOCOL_VERSION, "request_id": uuid.uuid4().hex,
                  "command": command, "data": data or {}}
         encoded = (json.dumps(frame) + "\n").encode("utf-8")
         with self._send_lock:

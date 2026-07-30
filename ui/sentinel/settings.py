@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 from asset_pages import PageHeader, label
 from theme import theme_manager
 from widgets import AppButton, AppCard
+from backend.build_info import APP_VERSION, BUILD_ID, API_SCHEMA_VERSION
 
 
 class StatusRow(AppCard):
@@ -49,7 +50,8 @@ class SettingsPage(QWidget):
         root=QVBoxLayout(content); root.setContentsMargins(0,0,6,0); root.setSpacing(12)
         root.addWidget(label("SCANNER HEALTH",muted=True,size=10,weight=800)); health=QGridLayout(); health.setSpacing(8); self.health_rows={}
         definitions=(("usbguard","USBGuard","Pre-driver device isolation"),("clamav","ClamAV","Antivirus signature engine"),
-                     ("yara","YARA","Static malware rules"),("root","Enforcement privileges","Mount and device authorization"))
+                     ("yara","YARA","Static malware rules"),("root","Enforcement privileges","Mount and device authorization"),
+                     ("deployment","Deployment","UI/backend build and project path match"))
         for i,(key,title,desc) in enumerate(definitions):
             row=StatusRow(title,desc); self.health_rows[key]=row; health.addWidget(row,i//2,i%2)
         root.addLayout(health)
@@ -140,12 +142,28 @@ class SettingsPage(QWidget):
     @staticmethod
     def _ready(value):
         return value is True or str(value).upper() in {"READY","ONLINE","OK","ACTIVE","TRUE","ENABLED"}
-    def apply_backend_status(self,system_status,resources):
+    def apply_backend_status(self,system_status,resources,runtime=None):
         status=dict(system_status or {}); aliases={"usbguard":("usbguard","USBGuard"),"clamav":("clamav","ClamAV"),"yara":("yara","YARA"),"root":("root","Linux")}; ready_count=0
         for key,names in aliases.items():
             value=next((status[name] for name in names if name in status),None); ready=self._ready(value); ready_count+=int(ready)
             self.health_rows[key].set_status("Ready" if ready else "Unavailable","success" if ready else "warning")
-        self.lbl_status.setText(f"{ready_count}/4 scanner capabilities reported ready")
+        runtime=dict(runtime or {})
+        deployment_ready=bool(
+            runtime.get("build_id") == BUILD_ID
+            and runtime.get("app_version") == APP_VERSION
+            and runtime.get("api_schema_version") == API_SCHEMA_VERSION
+            and runtime.get("project_root")
+        )
+        deployment_text=(f"{runtime.get('app_version')} · {runtime.get('build_id')}"
+                         if deployment_ready else "Version/path mismatch")
+        self.health_rows["deployment"].set_status(
+            deployment_text, "success" if deployment_ready else "danger"
+        )
+        self.lbl_status.setText(
+            f"{ready_count}/4 scanner capabilities ready · "
+            f"backend {runtime.get('app_version', 'unknown')} · "
+            f"{runtime.get('project_root', 'unknown path')}"
+        )
         self.btn_diagnostics.setEnabled(True)
         self.btn_diagnostics.setText("Run diagnostics")
         if resources:self.apply_backend_resources(resources)
