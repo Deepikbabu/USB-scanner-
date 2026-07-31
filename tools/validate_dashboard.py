@@ -35,13 +35,16 @@ def main():
     timer = getattr(window.page_dashboard, "detection_timer", None)
     assert timer is None or not timer.isActive(), "simulated device timer is active"
     assert not window.page_dashboard.btn_trigger.isVisible(), "simulation control is visible"
-    expanded_width = window.nav_bar.maximumWidth()
     window.nav_bar.toggle_collapsed()
     QTest.qWait(300)
     assert window.nav_bar.collapsed
-    assert window.nav_bar.maximumWidth() < expanded_width
+    assert all(not button.text_label.isVisible()
+               for button in window.nav_bar.buttons)
     window.nav_bar.toggle_collapsed()
     QTest.qWait(300)
+    assert not window.nav_bar.collapsed
+    assert all(button.text_label.isVisible()
+               for button in window.nav_bar.buttons)
 
     # Verify the exact action structure emitted by IPCServer, including replay.
     captured_actions = []

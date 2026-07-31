@@ -206,7 +206,7 @@ class StatusBadge(QWidget):
             f"QWidget#statusBadge {{ background: {theme_manager.get_color('surface_raised')};"
             f" border: 1px solid {theme_manager.get_color('border')}; border-radius: 10px; }}"
             f" QLabel {{ color: {color}; font-size: 9px; font-weight: 800;"
-            " letter-spacing: 0.6px; border: none; background: transparent; }}"
+            " letter-spacing: 0.6px; border: none; background: transparent; }"
         )
 
 
