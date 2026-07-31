@@ -38,12 +38,12 @@ def main():
     window.nav_bar.toggle_collapsed()
     QTest.qWait(300)
     assert window.nav_bar.collapsed
-    assert all(not button.text_label.isVisible()
+    assert all(button.text_label.isHidden()
                for button in window.nav_bar.buttons)
     window.nav_bar.toggle_collapsed()
     QTest.qWait(300)
     assert not window.nav_bar.collapsed
-    assert all(button.text_label.isVisible()
+    assert all(not button.text_label.isHidden()
                for button in window.nav_bar.buttons)
 
     # Verify the exact action structure emitted by IPCServer, including replay.
