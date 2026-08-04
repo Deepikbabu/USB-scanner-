@@ -97,15 +97,18 @@ def status() -> None:
     print(f"Configuration : {CONFIG_PATH}")
     print(f"File exists   : {CONFIG_PATH.exists()}")
     print(f"Enabled       : {config.enabled}")
-    print(f"Ready         : {config.ready}")
+    print(f"SMTP ready    : {config.smtp_ready}")
+    print(f"Recipient ready: {bool(config.recipients)}")
     print(f"SMTP          : {config.host or 'not configured'}:{config.port}")
     print(f"Sender        : {config.sender or 'not configured'}")
     print(f"Recipients    : {', '.join(config.recipients) or 'not configured'}")
     print(f"Transport     : {'implicit TLS' if config.ssl else 'STARTTLS' if config.tls else 'plain SMTP'}")
     if not config.enabled:
         print("Action         : run sudo ./run.sh --configure-email")
-    elif not config.ready:
-        print("Action         : configuration is incomplete; run --configure-email again")
+    elif not config.smtp_ready:
+        print("Action         : SMTP sender configuration is incomplete; run --configure-email again")
+    elif not config.recipients:
+        print("Action         : enter a recipient in the dashboard for this session")
     print("\nRecent deliveries")
     for incident, verdict, state, attempts, updated, error in EmailQueue().status():
         stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(updated))

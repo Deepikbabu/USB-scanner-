@@ -31,6 +31,11 @@ class EmailConfig:
     def ready(self) -> bool:
         return bool(self.enabled and self.host and self.sender and self.recipients)
 
+    @property
+    def smtp_ready(self) -> bool:
+        """Sender transport is configured; recipient may be session-scoped."""
+        return bool(self.enabled and self.host and self.sender)
+
 
 def load_email_config(path: Path = CONFIG_PATH) -> EmailConfig:
     values: dict[str, str] = {}

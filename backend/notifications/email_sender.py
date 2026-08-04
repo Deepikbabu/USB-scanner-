@@ -11,7 +11,7 @@ from .email_config import EmailConfig
 def send_message(config: EmailConfig, subject: str, body: str,
                  attachments: list[str] | None = None,
                  recipients: tuple[str, ...] | list[str] | None = None) -> None:
-    if not config.ready:
+    if not config.smtp_ready:
         raise RuntimeError("email is disabled or configuration is incomplete")
     message = EmailMessage()
     message["Subject"], message["From"] = subject, config.sender

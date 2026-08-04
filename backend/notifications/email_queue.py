@@ -48,7 +48,7 @@ class EmailQueue:
         if not config.enabled:
             return False
         recipients = [recipient] if recipient else list(config.recipients)
-        if not config.host or not config.sender or not recipients:
+        if not config.smtp_ready or not recipients:
             raise RuntimeError("email is enabled but SMTP host, sender, or recipients are incomplete")
         now = time.time()
         with self._connect() as connection:
