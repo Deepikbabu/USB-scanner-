@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 import secrets
+import re
 import subprocess
 import sys
 from collections import deque
@@ -177,6 +178,8 @@ class IPCServer:
                     "status": "accepted" if accepted else "rejected"}
         elif command == "ping":
             data = {"status": "ONLINE", "time": time.time()}
+        elif command == "set_email_recipient":
+            data = self._set_email_recipient(request.get("data") or {})
         elif command == "get_audit_log":
             data = {"entries": self._audit_entries(
                 int((request.get("data") or {}).get("limit", 250))
@@ -220,6 +223,29 @@ class IPCServer:
             return {"protocol": 1, "request_id": request_id, "status": "error",
                     "error": "unknown command"}
         return {"protocol": 1, "request_id": request_id, "status": "ok", "data": data}
+
+    def _set_email_recipient(self, values: dict[str, Any]) -> dict[str, Any]:
+        address = str(values.get("email") or "").strip()
+        if len(address) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", address):
+            return {"ok": False, "error": "invalid email address"}
+        from backend.notifications.email_config import CONFIG_PATH
+        try:
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            existing = {}
+            if CONFIG_PATH.exists():
+                for line in CONFIG_PATH.read_text(encoding="utf-8").splitlines():
+                    if "=" in line and not line.lstrip().startswith("#"):
+                        key, value = line.split("=", 1); existing[key.strip()] = value.strip()
+            existing["EMAIL_TO"] = address
+            existing.setdefault("EMAIL_ENABLED", "true")
+            temporary = CONFIG_PATH.with_suffix(".tmp")
+            temporary.write_text("".join(f"{key}={value}\n" for key, value in existing.items()), encoding="utf-8")
+            temporary.replace(CONFIG_PATH)
+            if os.name != "nt": CONFIG_PATH.chmod(0o600)
+            self.publish("email_delivery_updated", {"status": "recipient_saved", "email": address})
+            return {"ok": True, "email": address, "status": "recipient_saved"}
+        except OSError as exc:
+            return {"ok": False, "error": f"could not save email configuration: {exc}"}
 
     def _audit(self, operator: str, action: str, target: str,
                reason: str, outcome: str) -> None:

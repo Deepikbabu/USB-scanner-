@@ -11,8 +11,9 @@ import socket
 import sys
 import threading
 import time
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QGridLayout, QLabel, QMainWindow, QProgressBar, QTextEdit, QWidget
+from PyQt6.QtCore import QObject, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtWidgets import QApplication, QGridLayout, QLabel, QLineEdit, QMainWindow, QProgressBar, QTextEdit, QWidget, QPushButton
 
 SOCKET = os.environ.get("USB_SCANNER_SOCKET", "/run/usb-scanner/backend.sock")
 
@@ -23,6 +24,14 @@ class Client(QObject):
         super().__init__(); self.running = True; self.sock = None
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
+    def command(self, command, data):
+        if not self.sock: return False
+        try:
+            self.sock.sendall((json.dumps({"protocol": 1, "command": command,
+                                           "request_id": "dashboard-action", "data": data}) + "\n").encode())
+            return True
+        except OSError:
+            return False
     def _run(self):
         while self.running:
             try:
@@ -61,10 +70,28 @@ class Window(QMainWindow):
             value = QLabel("-"); value.setTextInteractionFlags(value.textInteractionFlags())
             self.values[field] = value; grid.addWidget(value, row, 1)
         self.progress = QProgressBar(); grid.addWidget(self.progress, 11, 0, 1, 2)
-        self.log = QTextEdit(); self.log.setReadOnly(True); grid.addWidget(self.log, 12, 0, 1, 2)
+        self.email_input = QLineEdit(); self.email_input.setPlaceholderText("Notification email address")
+        self.email_save = QPushButton("Use email for this session")
+        self.email_save.clicked.connect(self.save_email)
+        grid.addWidget(self.email_input, 12, 0); grid.addWidget(self.email_save, 12, 1)
+        self.pdf = QPushButton("PDF report unavailable"); self.pdf.setEnabled(False)
+        self.json = QPushButton("JSON report unavailable"); self.json.setEnabled(False)
+        self.pdf.clicked.connect(lambda: self.open_report(self.pdf.property("path")))
+        self.json.clicked.connect(lambda: self.open_report(self.json.property("path")))
+        grid.addWidget(self.pdf, 13, 0); grid.addWidget(self.json, 13, 1)
+        self.log = QTextEdit(); self.log.setReadOnly(True); grid.addWidget(self.log, 14, 0, 1, 2)
         self.client = Client(); self.client.message.connect(self.apply); self.client.connection.connect(self.set_connection)
         self.client.start()
     def set_connection(self, state): self.values["connection"].setText(state)
+    def save_email(self):
+        address = self.email_input.text().strip()
+        if self.client.command("set_email_recipient", {"email": address}):
+            self.log.append(f"Email recipient submitted to backend: {address}")
+        else:
+            self.log.append("Email recipient could not be submitted: backend offline")
+    @staticmethod
+    def open_report(path):
+        if path: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
     def apply(self, message):
         data = message.get("data", message)
         if message.get("event"):
@@ -76,6 +103,13 @@ class Window(QMainWindow):
                 self.values["files"].setText(str(payload.get("files", "-")))
             if event in {"report_ready", "incident_completed"}:
                 self.values["verdict"].setText(str(payload.get("verdict", "-")))
+                self.progress.setValue(100)
+                for button, key, label in ((self.pdf, "pdf_path", "Open PDF report"),
+                                           (self.json, "json_path", "Open JSON report")):
+                    path = payload.get(key)
+                    button.setProperty("path", path)
+                    button.setText(label if path else f"{label} unavailable")
+                    button.setEnabled(bool(path))
         device = data.get("device") if isinstance(data, dict) else None
         if isinstance(device, dict):
             self.values["device"].setText(str(device.get("name") or device.get("model") or "-"))
