@@ -169,7 +169,10 @@ def request_user_action(title, device_name, summary, options, default, timeout=6
     expired = False
     PROMPT_ACTIVE.set()
     try:
-        interactive = sys.stdin.isatty()
+        # Prefer the connected dashboard for decisions. The terminal prompt is
+        # only a fallback when no IPC client is connected, preventing duplicate
+        # permission prompts in the CLI and UI.
+        interactive = sys.stdin.isatty() and not bool(getattr(ipc, "clients", set()))
         if not interactive:
             print(f"[ACTION] Waiting up to {timeout}s for dashboard response. Safe default: {default.upper()}")
             response = ipc.wait_action(action_id, timeout)

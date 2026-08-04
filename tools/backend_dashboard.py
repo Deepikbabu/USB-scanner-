@@ -13,7 +13,7 @@ import threading
 import time
 from PyQt6.QtCore import QObject, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QApplication, QGridLayout, QLabel, QLineEdit, QMainWindow, QProgressBar, QTextEdit, QWidget, QPushButton
+from PyQt6.QtWidgets import QApplication, QGridLayout, QLabel, QLineEdit, QMainWindow, QProgressBar, QTextEdit, QWidget, QPushButton, QMessageBox
 
 SOCKET = os.environ.get("USB_SCANNER_SOCKET", "/run/usb-scanner/backend.sock")
 
@@ -32,6 +32,10 @@ class Client(QObject):
             return True
         except OSError:
             return False
+    def submit_decision(self, action_id, decision, token):
+        return self.command("submit_decision", {"action_id": action_id,
+                                                   "decision": decision,
+                                                   "confirmation_token": token})
     def _run(self):
         while self.running:
             try:
@@ -94,6 +98,9 @@ class Window(QMainWindow):
         if path: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
     def apply(self, message):
         data = message.get("data", message)
+        if message.get("event") == "user_action_required":
+            self.show_action(message.get("data", {}) or {})
+            return
         if message.get("event"):
             event = message.get("event"); payload = message.get("data", {}) or {}
             self.log.append(f"{event}: {json.dumps(payload, default=str)}")
@@ -124,6 +131,24 @@ class Window(QMainWindow):
             self.values["coverage"].setText("COMPLETE" if complete is True else "INCOMPLETE" if complete is False else "-")
         email = data.get("email_status") if isinstance(data, dict) else None
         if isinstance(email, dict): self.values["email"].setText("READY" if email.get("ready") else "NOT CONFIGURED")
+
+    def show_action(self, action):
+        options = action.get("options") or []
+        box = QMessageBox(self)
+        box.setWindowTitle(str(action.get("title", "USB action required")))
+        box.setText(f"{action.get('summary', '')}\n\nThe device remains isolated until you choose.")
+        buttons = {}
+        for item in options:
+            if not isinstance(item, dict): continue
+            button = box.addButton(str(item.get("label") or item.get("id")), QMessageBox.ButtonRole.AcceptRole)
+            buttons[button] = str(item.get("id"))
+        box.exec()
+        clicked = box.clickedButton()
+        decision = buttons.get(clicked, str(action.get("safe_default") or "block"))
+        token = str(action.get("confirmation_token") or "")
+        self.log.append(f"Submitting backend decision: {decision}")
+        if not self.client.submit_decision(str(action.get("action_id", "")), decision, token):
+            self.log.append("Decision could not be submitted; backend safe default remains active.")
 
 def main():
     app = QApplication(sys.argv); window = Window(); window.show(); raise SystemExit(app.exec())
