@@ -37,8 +37,8 @@ def configure() -> None:
     recipients = safe(input("Recipient email(s), comma separated: "))
     ssl = port == "465"
     tls_answer = safe(input("Use STARTTLS? [Y/n]: ") or "y").lower()
-    if not host or not sender or not recipients:
-        raise SystemExit("SMTP host, sender, and at least one recipient are required.")
+    if not host or not sender:
+        raise SystemExit("SMTP host and sender are required.")
     try:
         parsed_port = int(port)
         if not 1 <= parsed_port <= 65535:
@@ -60,6 +60,8 @@ def configure() -> None:
     temporary.replace(CONFIG_PATH)
     CONFIG_PATH.chmod(0o600)
     print(f"[OK] Protected email configuration written to {CONFIG_PATH}")
+    if not recipients:
+        print("[INFO] No default recipient configured; the dashboard may provide a per-scan recipient.")
 
 
 def set_enabled(enabled: bool) -> None:

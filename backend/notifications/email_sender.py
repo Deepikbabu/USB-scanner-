@@ -9,12 +9,16 @@ from .email_config import EmailConfig
 
 
 def send_message(config: EmailConfig, subject: str, body: str,
-                 attachments: list[str] | None = None) -> None:
+                 attachments: list[str] | None = None,
+                 recipients: tuple[str, ...] | list[str] | None = None) -> None:
     if not config.ready:
         raise RuntimeError("email is disabled or configuration is incomplete")
     message = EmailMessage()
     message["Subject"], message["From"] = subject, config.sender
-    message["To"] = ", ".join(config.recipients)
+    target_recipients = tuple(recipients or config.recipients)
+    if not target_recipients:
+        raise RuntimeError("no email recipient configured")
+    message["To"] = ", ".join(target_recipients)
     message.set_content(body)
     limit = config.max_attachment_mb * 1024 * 1024
     for value in attachments or []:

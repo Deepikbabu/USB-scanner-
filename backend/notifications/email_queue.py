@@ -62,7 +62,8 @@ class EmailQueue:
             spool_path = self.spool / spool_name
             temporary = spool_path.with_suffix(".tmp")
             temporary.write_text(json.dumps({"subject": subject, "body": body,
-                                             "attachments": attachments or []}), encoding="utf-8")
+                                             "attachments": attachments or [],
+                                             "recipients": list(config.recipients)}), encoding="utf-8")
             if os.name != "nt":
                 temporary.chmod(0o600)
             temporary.replace(spool_path)
@@ -92,7 +93,8 @@ class EmailQueue:
             key, attempts, spool_path = row
             try:
                 payload = json.loads(Path(spool_path).read_text(encoding="utf-8"))
-                send_message(config, payload["subject"], payload["body"], payload.get("attachments"))
+                send_message(config, payload["subject"], payload["body"], payload.get("attachments"),
+                             payload.get("recipients"))
                 self._set_result(key, "SENT", attempts + 1, 0, "")
                 Path(spool_path).unlink(missing_ok=True)
             except Exception as exc:

@@ -88,8 +88,9 @@ def main() -> int:
         if email.ready:
             print(f"Email notifications READY - {email.host}:{email.port} -> {len(email.recipients)} recipient(s)")
         elif email.enabled:
-            print(f"Email notifications FAILED - incomplete configuration in {CONFIG_PATH}")
-            results.append(False)
+            # SMTP is optional and must not prevent USB isolation/scanning.
+            # Reports remain local until the configuration is repaired.
+            print(f"Email notifications WARNING - incomplete configuration in {CONFIG_PATH}; scanning will continue")
         else:
             print("Email notifications OPTIONAL - disabled")
     except Exception as exc:
