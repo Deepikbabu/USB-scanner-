@@ -1,7 +1,9 @@
 """In-memory recipient store for the running scanner session."""
 from __future__ import annotations
 import re
+import uuid
 _current_recipient: str | None = None
+_session_id = uuid.uuid4().hex
 
 def set_session_recipient(email: str) -> bool:
     value = str(email or "").strip()
@@ -14,6 +16,9 @@ def set_session_recipient(email: str) -> bool:
 
 def get_session_recipient() -> str | None:
     return _current_recipient
+
+def get_session_id() -> str:
+    return _session_id
 
 def clear_session_recipient() -> None:
     global _current_recipient

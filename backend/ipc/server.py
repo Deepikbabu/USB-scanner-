@@ -231,8 +231,10 @@ class IPCServer:
         from backend.notifications.session_state import set_session_recipient
         if not set_session_recipient(address):
             return {"ok": False, "error": "invalid email address"}
+        from backend.notifications.manager import assign_session_recipient
+        pending = assign_session_recipient(address)
         self.publish("email_delivery_updated", {"status": "recipient_saved", "email": address})
-        return {"ok": True, "email": address, "status": "recipient_saved"}
+        return {"ok": True, "email": address, "status": "recipient_saved", "pending_queued": pending}
 
     def _audit(self, operator: str, action: str, target: str,
                reason: str, outcome: str) -> None:

@@ -35,6 +35,10 @@ class EmailQueue:
                 delivery_key TEXT PRIMARY KEY, incident_id TEXT, verdict TEXT,
                 status TEXT, attempts INTEGER, next_attempt REAL, created REAL,
                 updated REAL, last_error TEXT, spool_path TEXT)""")
+            if "recipient" not in {row[1] for row in connection.execute("PRAGMA table_info(delivery)")}: 
+                connection.execute("ALTER TABLE delivery ADD COLUMN recipient TEXT")
+            if "session_id" not in {row[1] for row in connection.execute("PRAGMA table_info(delivery)")}: 
+                connection.execute("ALTER TABLE delivery ADD COLUMN session_id TEXT")
         if os.name != "nt":
             self.db.chmod(0o600)
 
@@ -48,8 +52,9 @@ class EmailQueue:
         if not config.enabled:
             return False
         recipients = [recipient] if recipient else list(config.recipients)
-        if not config.smtp_ready or not recipients:
-            raise RuntimeError("email is enabled but SMTP host, sender, or recipients are incomplete")
+        if not config.smtp_ready:
+            raise RuntimeError("email is enabled but SMTP host or sender is incomplete")
+        status = "QUEUED" if recipients else "PENDING_RECIPIENT"
         now = time.time()
         with self._connect() as connection:
             existing = connection.execute(
@@ -69,10 +74,29 @@ class EmailQueue:
             if os.name != "nt":
                 temporary.chmod(0o600)
             temporary.replace(spool_path)
-            connection.execute("REPLACE INTO delivery VALUES (?,?,?,?,?,?,?,?,?,?)", (
-                delivery_key, incident_id, verdict, "QUEUED", 0, now, now, now, "", str(spool_path)))
-        self.start()
+            from .session_state import get_session_id
+            connection.execute("REPLACE INTO delivery VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (
+                delivery_key, incident_id, verdict, status, 0, now, now, now, "", str(spool_path),
+                recipients[0] if recipients else "", get_session_id()))
+        if recipients: self.start()
         return True
+
+    def assign_recipient(self, recipient: str, session_id: str) -> int:
+        count = 0
+        with self._connect() as connection:
+            rows = connection.execute("SELECT delivery_key,spool_path FROM delivery WHERE status='PENDING_RECIPIENT' AND session_id=?", (session_id,)).fetchall()
+            for key, spool_path in rows:
+                try:
+                    payload = json.loads(Path(spool_path).read_text(encoding="utf-8"))
+                    payload["recipients"] = [recipient]
+                    Path(spool_path).write_text(json.dumps(payload), encoding="utf-8")
+                    connection.execute("UPDATE delivery SET status='QUEUED',recipient=?,next_attempt=?,updated=? WHERE delivery_key=?",
+                                       (recipient, time.time(), time.time(), key))
+                    count += 1
+                except (OSError, json.JSONDecodeError):
+                    continue
+        if count: self.start()
+        return count
 
     def start(self) -> None:
         if self._worker and self._worker.is_alive():
@@ -83,7 +107,7 @@ class EmailQueue:
     def _run(self) -> None:
         while not self._stop.wait(2):
             config = load_email_config()
-            if not config.ready:
+            if not config.smtp_ready:
                 continue
             with self._connect() as connection:
                 row = connection.execute(

@@ -20,6 +20,10 @@ def get_queue() -> EmailQueue:
 def start_email_worker() -> None:
     get_queue().start()
 
+def assign_session_recipient(recipient: str) -> int:
+    from .session_state import get_session_id
+    return get_queue().assign_recipient(recipient, get_session_id())
+
 
 def queue_incident_email(incident_id: str, verdict: str,
                          json_report: str | None, pdf_report: str | None) -> bool:
@@ -30,8 +34,9 @@ def queue_incident_email(incident_id: str, verdict: str,
     from .session_state import get_session_recipient
     recipient = get_session_recipient()
     if not recipient:
-        print("[EMAIL] No recipient set for this session — skipping send")
-        return False
+        print("[EMAIL] No recipient set for this session — report pending recipient")
+        return get_queue().enqueue(f"incident:{incident_id}", incident_id, verdict,
+                                   subject, body, attachments, recipient=None)
     return get_queue().enqueue(f"incident:{incident_id}", incident_id, verdict,
                                subject, body, attachments, recipient=recipient)
 
