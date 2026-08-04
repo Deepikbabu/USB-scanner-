@@ -1801,11 +1801,15 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
         )
         coverage = device_info.setdefault("scan_coverage", {
             "total_files": 0, "cached_files": 0, "fully_scanned_files": 0,
+            "processed_files": 0, "files_failed": 0, "files_skipped": 0,
             "engine_signature": scan_engine_signature(),
         })
         coverage["total_files"] += total_files
         coverage["cached_files"] += cached_files
         coverage["fully_scanned_files"] += max(0, total_files - cached_files)
+        coverage["processed_files"] += max(0, processed)
+        coverage["files_failed"] = coverage.get("files_failed", 0) + failed_files
+        coverage["files_skipped"] = coverage.get("files_skipped", 0)
         coverage["cache_reuse_allowed"] = cache_valid
         coverage["timed_out_files"] = coverage.get("timed_out_files", 0) + timed_out_files
         coverage["failed_files"] = coverage.get("failed_files", 0) + failed_files
@@ -1813,6 +1817,12 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
             list(coverage.get("enumeration_errors") or []) + enumeration_errors
         )
         coverage["enumeration_complete"] = not bool(coverage["enumeration_errors"])
+        coverage["scan_complete"] = bool(
+            coverage["enumeration_complete"]
+            and coverage["processed_files"] == coverage["total_files"]
+            and coverage["files_failed"] == 0
+            and coverage["files_skipped"] == 0
+        )
         coverage["empty_filesystem_verified"] = bool(
             total_files == 0 and coverage["enumeration_complete"]
             and os.path.isdir(mount_path) and os.access(mount_path, os.R_OK)
@@ -1821,6 +1831,7 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
             coverage["timed_out_files"]
             or coverage["failed_files"]
             or not coverage["enumeration_complete"]
+            or not coverage["scan_complete"]
         )
         if coverage["incomplete"]:
             # Coverage failures are operational failures, not malware, but
@@ -4093,12 +4104,25 @@ def _process_hid_event(event_name, seen_events):
 
     # ── FAST-BLOCK: unknown keyboard interface ────────────────────────────────
     already_blocked = False
+    startup_console_hid = False
     if device_info.get("has_kbd_handler") and vid_pid not in HID_WHITELIST:
+        try:
+            from backend.scanner.usb_state_restore import is_preexisting_working_hid
+            startup_console_hid = is_preexisting_working_hid({
+                "vid_pid": vid_pid, "serial": device_info.get("serial", ""),
+                "hash": device_info.get("usbguard_hash", ""),
+                "interfaces": device_info.get("interfaces", ["03"]),
+            })
+        except (OSError, ValueError, TypeError):
+            startup_console_hid = False
+    if device_info.get("has_kbd_handler") and vid_pid not in HID_WHITELIST and not startup_console_hid:
         print(Colors.RED + Colors.BOLD +
               "\n⚡ UNKNOWN KEYBOARD INTERFACE — BLOCKING NOW ⚡" + Colors.END)
         alert_hid_blocked(device_info.get('name', 'Unknown HID Device'))
         block_hid_device(device_info, event_name)
         already_blocked = True
+    elif startup_console_hid:
+        print(Colors.GREEN + f"[ HID ] Preserving exact pre-existing console device ({vid_pid})" + Colors.END)
 
     # ── Injection timing check ────────────────────────────────────────────────
     injection_risk = 0
