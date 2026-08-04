@@ -77,6 +77,7 @@ from backend.security.intelligence import (
 from backend.notifications import (
     queue_incident_email, queue_operational_email, start_email_worker,
 )
+from backend.notifications.session_state import clear_session_recipient
 from backend.ipc import get_ipc_server, publish_event
 
 UI_MODE = False
@@ -4344,6 +4345,7 @@ if __name__ == "__main__":
     
     # Initialize components
     load_whitelist()
+    clear_session_recipient()
     start_email_worker()
     get_ipc_server().start()
     

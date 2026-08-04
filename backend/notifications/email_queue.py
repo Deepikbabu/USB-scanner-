@@ -42,11 +42,13 @@ class EmailQueue:
         return sqlite3.connect(self.db, timeout=10)
 
     def enqueue(self, delivery_key: str, incident_id: str, verdict: str,
-                subject: str, body: str, attachments: list[str] | None = None) -> bool:
+                subject: str, body: str, attachments: list[str] | None = None,
+                recipient: str | None = None) -> bool:
         config = load_email_config()
         if not config.enabled:
             return False
-        if not config.ready:
+        recipients = [recipient] if recipient else list(config.recipients)
+        if not config.host or not config.sender or not recipients:
             raise RuntimeError("email is enabled but SMTP host, sender, or recipients are incomplete")
         now = time.time()
         with self._connect() as connection:
@@ -63,7 +65,7 @@ class EmailQueue:
             temporary = spool_path.with_suffix(".tmp")
             temporary.write_text(json.dumps({"subject": subject, "body": body,
                                              "attachments": attachments or [],
-                                             "recipients": list(config.recipients)}), encoding="utf-8")
+                                             "recipients": recipients}), encoding="utf-8")
             if os.name != "nt":
                 temporary.chmod(0o600)
             temporary.replace(spool_path)

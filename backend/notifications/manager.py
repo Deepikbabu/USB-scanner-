@@ -27,8 +27,13 @@ def queue_incident_email(incident_id: str, verdict: str,
         return False
     subject, body = incident_message(incident_id, verdict, json_report)
     attachments = [value for value in (pdf_report, json_report) if value]
+    from .session_state import get_session_recipient
+    recipient = get_session_recipient()
+    if not recipient:
+        print("[EMAIL] No recipient set for this session — skipping send")
+        return False
     return get_queue().enqueue(f"incident:{incident_id}", incident_id, verdict,
-                               subject, body, attachments)
+                               subject, body, attachments, recipient=recipient)
 
 
 def queue_operational_email(event_key: str, subject: str, body: str) -> bool:
