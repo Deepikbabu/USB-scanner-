@@ -58,6 +58,7 @@ setup_python() {
     [[ -d .venv ]] || python3 -m venv .venv
     .venv/bin/python3 -m pip install --quiet --upgrade pip
     .venv/bin/python3 -m pip install --quiet -r requirements.txt
+    .venv/bin/python3 tools/source_integrity.py || die "Python source integrity check failed; refusing to continue."
     # Dashboard and read-only diagnostic commands do not need to rewrite an
     # existing signature database. The root backend initializes it again when
     # it starts. This also supports databases created by the systemd service.
