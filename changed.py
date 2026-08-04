@@ -1377,7 +1377,16 @@ def mount_for_quarantine_scan(device_node):
     existing_mount = find_mount_point(device_node)
     if existing_mount:
         print(Colors.YELLOW + f"[*] USB auto-mounted at {existing_mount}; unmounting before safety scan." + Colors.END)
-        unmount_storage(device_node, existing_mount)
+        if not unmount_storage(device_node, existing_mount):
+            print(Colors.RED + "[!] Existing auto-mount could not be released; refusing scan." + Colors.END)
+            return None, False
+        for _ in range(20):
+            if find_mount_point(device_node) is None:
+                break
+            time.sleep(0.25)
+        if find_mount_point(device_node) is not None:
+            print(Colors.RED + "[!] Existing mount is still active; refusing scan." + Colors.END)
+            return None, False
 
     if not is_root_user():
         print(Colors.RED +
@@ -2871,6 +2880,22 @@ def handle_usb_device(device):
             previous_storage_entry = None
         antivirus_available = _clamav_command() is not None
         yara_available = load_yara_rules() is not None
+        scan_permission = request_user_action(
+            "USB storage is isolated and ready for scanning.",
+            usb_info.get("model", "USB storage"),
+            "The device is temporarily isolated. Choose whether to begin a full read-only scan.",
+            {"1": ("scan", "Begin full read-only scan"),
+             "2": ("block", "Keep the device blocked"),
+             "3": ("cancel", "Cancel and keep blocked")},
+            "block", timeout=60,
+        )
+        if scan_permission != "scan":
+            storage_risk += 15
+            flags.append("User did not approve storage scan; device remains blocked")
+            print(Colors.YELLOW + "[!] Storage scan was not approved; device remains blocked." + Colors.END)
+            set_device_state(device_id, "BLOCKED", "scan permission not granted")
+            has_storage = False
+        print(Colors.GREEN + "[+] User approved full read-only storage scan." + Colors.END)
 
         # Retry partition detection — kernel may need extra time to register block devices
         for attempt in range(5):
@@ -2890,7 +2915,10 @@ def handle_usb_device(device):
                             storage_risk += 5
                             flags.append("YARA unavailable; storage cannot be accepted as safe")
                         print(Colors.CYAN + f"[*] Found partition: {block_device.device_node}" + Colors.END)
-                        mount, quarantine_mount = mount_for_quarantine_scan(block_device.device_node)
+                        mount, quarantine_mount = (
+                            mount_for_quarantine_scan(block_device.device_node)
+                            if scan_permission == "scan" else (None, False)
+                        )
                         if mount:
                             print(f"[+] Scanning from {mount}")
                             scanned_paths.append(mount)
