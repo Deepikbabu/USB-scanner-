@@ -682,7 +682,7 @@ class MainWindow(QMainWindow):
         decision = mapping.get(
             box.clickedButton(), action.get("safe_default") or action.get("default") or "block"
         )
-        sent = self.backend.submit_decision(action_id, decision)
+        sent = self.backend.submit_decision(action_id, decision, str(action.get("confirmation_token", "")))
         if sent:
             self.page_dashboard.notification_center.add_log(
                 f"Decision submitted: {decision}. Waiting for backend confirmation."

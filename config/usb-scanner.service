@@ -20,6 +20,16 @@ Group=usb-scanner
 RuntimeDirectory=usb-scanner
 RuntimeDirectoryMode=0770
 Environment=PYTHONUNBUFFERED=1
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryMax=1G
+CPUQuota=90%
+ReadWritePaths=/var/lib/usb-scanner /run/usb-scanner __PROJECT_ROOT__
 StandardOutput=journal
 StandardError=journal
 

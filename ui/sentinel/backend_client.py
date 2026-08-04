@@ -59,9 +59,10 @@ class BackendClient(QObject):
             except OSError:
                 return False
 
-    def submit_decision(self, action_id, decision):
+    def submit_decision(self, action_id, decision, confirmation_token=""):
         return self.command("submit_decision", {
-            "action_id": action_id, "decision": decision
+            "action_id": action_id, "decision": decision,
+            "confirmation_token": confirmation_token,
         })
 
     def recover_hid(self):

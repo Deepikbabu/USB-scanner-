@@ -29,3 +29,5 @@ test_pdf.py
 
 # Legacy/local email configuration (production uses /etc/usb-scanner/email.env)
 email_config.json
+.scanner_state/
+*.key

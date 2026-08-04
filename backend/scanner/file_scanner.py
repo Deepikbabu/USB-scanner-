@@ -11,6 +11,7 @@ from backend.database.malware_repository import MalwareHashRepository
 from backend.models.scan import DeviceInfo, FileFinding, ScanReport, ScanSummary
 from backend.scanner.risk_engine import RiskEngine
 from backend.scanner.yara_engine import scan_bytes as yara_scan_bytes
+from backend.scanner.advanced_detection import analyze_content
 
 
 class FileScanner:
@@ -49,6 +50,13 @@ class FileScanner:
                     continue
 
                 data = self._read_file_bytes(file_path)
+
+                content = analyze_content(data, filename) if data else {}
+                for evidence in content.get("evidence", []):
+                    medium_risk.append(FileFinding(path=str(file_path), size=size,
+                        reason=evidence, category="medium", score_delta=2))
+                    risk_score += 2
+                    structural_flags.append(evidence)
 
                 rule_applied = False
 
@@ -144,6 +152,16 @@ class FileScanner:
                         )
                         structural_flags.append(f"YARA: {finding.rule}")
                         risk_score += finding.risk
+                    rule_applied = True
+
+                # Entropy is evidence only. It never independently produces a
+                # malware verdict; a small signal is added only for executable
+                # content so packed binaries receive analyst attention.
+                if content.get("executable") and content.get("entropy", 0) >= 7.2:
+                    medium_risk.append(FileFinding(path=str(file_path), size=size,
+                        reason="High-entropy executable content", category="medium", score_delta=1))
+                    risk_score += 1
+                    structural_flags.append("High executable entropy")
                     rule_applied = True
 
                 if not rule_applied:

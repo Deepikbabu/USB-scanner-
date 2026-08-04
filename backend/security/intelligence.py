@@ -24,6 +24,29 @@ def canonical_hash(value: Any) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
     return hashlib.sha256(encoded).hexdigest()
 
+def serial_quality(serial: Any) -> str:
+    value = str(serial or "").strip().lower()
+    if not value or value in {"unknown", "unavailable", "none", "null", "0"}:
+        return "MISSING"
+    if len(set(value)) <= 2 or len(value) < 4:
+        return "WEAK"
+    return "STRONG"
+
+def canonical_descriptors(info: dict[str, Any]) -> dict[str, Any]:
+    """Normalize descriptor/config/interface/endpoint evidence for identity."""
+    interfaces = info.get("interfaces") or info.get("interface_details") or []
+    normalized = []
+    for item in interfaces:
+        if isinstance(item, dict):
+            normalized.append({k: str(item[k]).lower() for k in sorted(item) if k in
+                               {"class", "subclass", "protocol", "number", "endpoints"}})
+        else:
+            normalized.append(str(item).lower())
+    return {"configuration": str(info.get("configuration", "")).lower(),
+            "interfaces": sorted(normalized, key=str),
+            "endpoints": sorted(str(x).lower() for x in (info.get("endpoints") or [])),
+            "descriptor": str(info.get("usbguard_hash", info.get("descriptor_hash", ""))).lower()}
+
 
 def hardware_fingerprint(info: dict[str, Any], interfaces: set[str] | list[str]) -> str:
     evidence = {
@@ -42,19 +65,25 @@ def interface_fingerprint(interfaces: set[str] | list[str]) -> str:
 
 def device_identity_fingerprint(info: dict[str, Any], interfaces: set[str] | list[str]) -> str:
     """Build a composite identity independent of a transient USB port."""
+    descriptors = canonical_descriptors({**info, "interfaces": list(interfaces)})
     return canonical_hash({
         "vid": str(info.get("vid", "unknown")).lower(),
         "pid": str(info.get("pid", "unknown")).lower(),
         "serial": str(info.get("serial", "Unknown")),
         "usbguard_hash": str(info.get("usbguard_hash", "")),
-        "interfaces": sorted(interfaces),
+        "interfaces": sorted(interfaces), "descriptors": descriptors,
+        "topology": str(info.get("physical_port", info.get("port", "unknown"))),
+        "capacity": str(info.get("capacity", "")),
+        "filesystem_uuid": str(info.get("filesystem_uuid", "")),
+        "manufacturer": str(info.get("manufacturer", info.get("vendor", ""))).lower(),
+        "firmware": str(info.get("firmware", info.get("firmware_version", ""))),
     })
 
 
 def identity_quality(info: dict[str, Any], interfaces: set[str] | list[str]) -> str:
     """Classify how strongly a device can be distinguished from duplicates."""
     serial = str(info.get("serial", "")).strip().lower()
-    has_serial = serial not in {"", "unknown", "unavailable", "none"}
+    has_serial = serial_quality(serial) == "STRONG"
     has_descriptor = bool(str(info.get("usbguard_hash", "")).strip())
     has_interfaces = bool(list(interfaces))
     if has_serial and has_descriptor and has_interfaces:

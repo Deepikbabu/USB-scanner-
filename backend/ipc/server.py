@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import secrets
 import subprocess
 import sys
 from collections import deque
@@ -22,6 +23,7 @@ except ImportError:  # Allows protocol tests on non-Linux development hosts.
     grp = None
 
 PROTOCOL_VERSION = IPC_PROTOCOL_VERSION
+MAX_FRAME_BYTES = 256 * 1024
 DEFAULT_SOCKET = Path(os.environ.get("USB_SCANNER_SOCKET", "/run/usb-scanner/backend.sock"))
 STATE_ROOT = Path(os.environ.get("USB_SCANNER_STATE_DIR", "/var/lib/usb-scanner"))
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -117,6 +119,14 @@ class IPCServer:
     def _client_loop(self, client: socket.socket) -> None:
         buffer = b""
         try:
+            # On Linux, retain peer credentials for audit/authorization. The
+            # socket mode remains the first boundary for non-Linux hosts.
+            peer_uid = None
+            if hasattr(socket, "SO_PEERCRED"):
+                try:
+                    peer_uid = int.from_bytes(client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)[4:8], "little")
+                except OSError:
+                    peer_uid = None
             while self.running:
                 try:
                     chunk = client.recv(65536)
@@ -125,11 +135,14 @@ class IPCServer:
                 if not chunk:
                     break
                 buffer += chunk
+                if len(buffer) > MAX_FRAME_BYTES:
+                    client.sendall(b'{"protocol":1,"status":"error","error":"message too large"}\n')
+                    break
                 while b"\n" in buffer:
                     raw, buffer = buffer.split(b"\n", 1)
                     try:
                         request = json.loads(raw.decode("utf-8"))
-                        response = self._command(request)
+                        response = self._command(request, peer_uid=peer_uid)
                     except Exception as exc:
                         response = {"protocol": 1, "status": "error", "error": str(exc)}
                     # Serialize command replies with asynchronous broadcasts so
@@ -142,7 +155,11 @@ class IPCServer:
             try: client.close()
             except OSError: pass
 
-    def _command(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _command(self, request: dict[str, Any], peer_uid: int | None = None) -> dict[str, Any]:
+        if not isinstance(request, dict) or len(request) > 32:
+            return {"protocol": 1, "status": "error", "error": "invalid request schema"}
+        if not isinstance(request.get("command"), str) or len(request.get("command", "")) > 80:
+            return {"protocol": 1, "status": "error", "error": "invalid command"}
         request_id = request.get("request_id")
         command = request.get("command")
         if request.get("protocol", 1) != PROTOCOL_VERSION:
@@ -154,7 +171,8 @@ class IPCServer:
             data = {"events": self.history(int(request.get("data", {}).get("limit", 200)))}
         elif command == "submit_decision":
             values = request.get("data", {})
-            accepted = self.submit_action(str(values.get("action_id", "")), str(values.get("decision", "")))
+            accepted = self.submit_action(str(values.get("action_id", "")), str(values.get("decision", "")),
+                                           str(values.get("confirmation_token", "")))
             return {"protocol": 1, "request_id": request_id,
                     "status": "accepted" if accepted else "rejected"}
         elif command == "ping":
@@ -551,7 +569,8 @@ class IPCServer:
             if result in seen or not key.isdigit(): continue
             seen.add(result); choices.append({"id": result, "key": key, "label": label})
         action = {"action_id": action_id, "title": title, "device": device, "summary": summary,
-                  "options": choices, "safe_default": default, "expires_at": time.time() + timeout}
+                  "options": choices, "safe_default": default, "expires_at": time.time() + timeout,
+                  "confirmation_token": secrets.token_urlsafe(32)}
         self.pending_actions[action_id] = action
         self.action_responses[action_id] = queue.Queue(maxsize=1)
         self.publish("user_action_required", action)
@@ -566,9 +585,11 @@ class IPCServer:
         try: return response.get(timeout=timeout)
         except queue.Empty: return None
 
-    def submit_action(self, action_id: str, decision: str) -> bool:
+    def submit_action(self, action_id: str, decision: str, confirmation_token: str = "") -> bool:
         action, response = self.pending_actions.get(action_id), self.action_responses.get(action_id)
         if not action or not response or time.time() > action["expires_at"]:
+            return False
+        if not secrets.compare_digest(str(action.get("confirmation_token", "")), confirmation_token):
             return False
         allowed = {item["id"] for item in action["options"]}
         if decision not in allowed: return False

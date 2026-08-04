@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from backend.database.schema import migrate
 
 
 class SQLiteConnectionFactory:
@@ -14,4 +15,6 @@ class SQLiteConnectionFactory:
 
     def connect(self) -> sqlite3.Connection:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        return sqlite3.connect(self.database_path)
+        connection = sqlite3.connect(self.database_path)
+        migrate(connection)
+        return connection
