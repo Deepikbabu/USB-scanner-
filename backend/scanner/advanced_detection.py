@@ -22,7 +22,19 @@ MAGIC = ((b"MZ", "application/vnd.microsoft.portable-executable"),
          (b"PK\x03\x04", "application/zip"),
          (b"\xd0\xcf\x11\xe0", "application/vnd.ms-office"))
 
+try:
+    import magic as _libmagic
+except ImportError:  # optional on minimal Raspberry Pi installs
+    _libmagic = None
+
 def detect_mime(data: bytes, name: str = "") -> str:
+    if _libmagic is not None:
+        try:
+            detected = _libmagic.from_buffer(data[:1024 * 1024], mime=True)
+            if detected:
+                return str(detected)
+        except Exception:
+            pass
     for signature, mime in MAGIC:
         if data.startswith(signature):
             return mime

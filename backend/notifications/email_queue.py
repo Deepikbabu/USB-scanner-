@@ -78,6 +78,14 @@ class EmailQueue:
             connection.execute("REPLACE INTO delivery VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (
                 delivery_key, incident_id, verdict, status, 0, now, now, now, "", str(spool_path),
                 recipients[0] if recipients else "", get_session_id()))
+        try:
+            from backend.ipc import publish_event
+            publish_event("email_delivery_updated", {
+                "status": status, "recipient": recipients[0] if recipients else None,
+                "incident_id": incident_id, "verdict": verdict,
+            }, incident_id)
+        except Exception:
+            pass
         if recipients: self.start()
         return True
 

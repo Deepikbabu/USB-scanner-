@@ -72,7 +72,7 @@ def classify_device(device: dict[str, Any]) -> str:
         return "hid"
     if "storage" in capabilities:
         return "storage"
-    return "unsupported"
+    return "unknown"
 
 
 class Workflow:
@@ -100,8 +100,8 @@ class Workflow:
         category = classify_device(context.device)
         context.device["category"] = category
         context.state = DeviceState.CLASSIFIED
-        if category == "unsupported":
-            return self._fail(context, "unsupported_device")
+        if category == "unknown":
+            return self._fail(context, "unknown_device")
         if category == "hid":
             return self._fail(context, "hid_requires_dedicated_authorization")
         if category == "composite_hid_storage":

@@ -48,6 +48,8 @@ from backend.scanner.yara_engine import scan_bytes as yara_scan_bytes
 from backend.scanner import hid_policy
 from backend.scanner import storage_policy
 from backend.scanner import quarantine as quarantine_policy
+from backend.scanner.remediation import validate_action
+from backend.scanner.advanced_detection import analyze_content
 try:
     from backend.reports.incident import normalize_verdict as normalize_incident_verdict
     from backend.reports.evidence import build_evidence
@@ -73,6 +75,7 @@ except ImportError:  # Compatibility with older deployed copies during migration
 from backend.security.intelligence import (
     NVDClient, SignedTrustStore, hardware_fingerprint, interface_fingerprint,
     device_identity_fingerprint, identity_quality, incident_verdict, risk_breakdown,
+    manifest_fingerprint,
 )
 from backend.notifications import (
     queue_incident_email, queue_operational_email, start_email_worker,
@@ -368,7 +371,7 @@ def save_storage_whitelist():
     except Exception:
         return False
 
-def trust_storage_device(vid_pid, usb_info, fingerprint, file_hashes):
+def trust_storage_device(vid_pid, usb_info, fingerprint, file_hashes, verdict=None):
     coverage = dict(usb_info.get("scan_coverage") or {})
     record = {
         "label": f"{usb_info.get('vendor', 'Unknown')} {usb_info.get('model', 'USB Device')}",
@@ -388,6 +391,7 @@ def trust_storage_device(vid_pid, usb_info, fingerprint, file_hashes):
             not coverage.get("incomplete")
             and coverage.get("enumeration_complete") is True
         ),
+        "scan_verdict": verdict or ("MALICIOUS" if usb_info.get("malware_detected") else "CLEAN"),
     }
     STORAGE_WHITELIST[vid_pid] = record
     if not save_storage_whitelist():
@@ -1082,6 +1086,17 @@ def static_analyze(file_path: str) -> list:
             f.seek(0)
             data = read_analysis_sample(file_path)
 
+        # Content-based type and embedded-object inspection.  These are
+        # evidence signals; they never make a verdict by themselves.
+        content = analyze_content(data, os.path.basename(file_path))
+        detected_mime = content.get("mime")
+        if detected_mime:
+            findings.append({"issue": f"Content MIME: {detected_mime}", "risk": 0,
+                             "evidence_type": "mime"})
+        for evidence in content.get("evidence", []):
+            findings.append({"issue": evidence, "risk": 3,
+                             "evidence_type": "content"})
+
         yara_findings = yara_scan_bytes(data, os.path.basename(file_path))
         for finding in yara_findings:
             findings.append({
@@ -1654,11 +1669,11 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
     }
     cache_valid = bool(
         previous_entry
-        and previous_entry.get("verified_clean") is True
         and previous_entry.get("coverage_complete") is True
         and not previous_entry.get("force_rescan")
         and previous_entry.get("engine_signature") == scan_engine_signature()
     )
+    cached_malicious = cache_valid and previous_entry.get("scan_verdict") == "MALICIOUS"
     enumeration_errors = []
     
     try:
@@ -1715,6 +1730,10 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
                     "progress": progress,
                     "message": f"Scanning {os.path.basename(path)}...",
                     "files": f"{processed:,} / {total_files:,}",
+                    "total_files": total_files,
+                    "processed_files": processed,
+                    "files_failed": failed_files,
+                    "files_skipped": 0,
                     "speed": f"{files_per_second:.1f} files/s",
                     "elapsed": f"{int(elapsed_seconds) // 60:02d}:{int(elapsed_seconds) % 60:02d}",
                     "remaining": f"{int(remaining_seconds) // 60:02d}:{int(remaining_seconds) % 60:02d}",
@@ -1737,9 +1756,18 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
             if sha:
                 relative_path = os.path.relpath(path, mount_path)
                 file_hash_materials.append(f"{relative_path}:{sha}")
-                file_hashes.append({"path": path, "relative_path": relative_path, "sha256": sha})
+                try:
+                    stat = os.stat(path)
+                    size, mtime_ns = stat.st_size, stat.st_mtime_ns
+                except OSError:
+                    size, mtime_ns = 0, 0
+                file_hashes.append({"path": path, "relative_path": relative_path,
+                                    "size": size, "mtime_ns": mtime_ns, "sha256": sha})
 
             if not findings:
+                if reused_cache and cached_malicious:
+                    malware_detected = True
+                    malicious_files.append(path)
                 continue
 
             # 2. Risk Scoring Engine Integration
@@ -1789,9 +1817,13 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
 
     print(" " * 80, end="\r")
     storage_fingerprint = None
-    if file_hash_materials:
-        digest_input = "\n".join(sorted(file_hash_materials)).encode("utf-8")
-        storage_fingerprint = hashlib.sha256(digest_input).hexdigest()
+    if file_hashes:
+        # The content fingerprint is a canonical manifest fingerprint.  It is
+        # independent of mount path and changes when files are added, removed,
+        # renamed, resized, or their contents change.
+        storage_fingerprint = manifest_fingerprint(file_hashes)
+    if isinstance(device_info, dict):
+        device_info.setdefault("scan_coverage", {})["manifest_fingerprint"] = storage_fingerprint
     print(f"[*] Incremental scan: {cached_files} unchanged cached file(s), "
           f"{max(0, total_files - cached_files)} fully scanned file(s)")
     if isinstance(device_info, dict):
@@ -2303,6 +2335,20 @@ def generate_pdf_report(usb_info, base_risk, storage_risk, hid_risk, policy_risk
                 ))
 
             quarantine_records = usb_info.get("quarantine_records", [])
+            remediation = usb_info.get("remediation", {})
+            if remediation:
+                pdf.ln(4)
+                pdf.set_x(pdf.l_margin)
+                pdf.set_font("Helvetica", 'B', 11)
+                pdf.cell(0, 7, " Remediation and Release Decision", border="B", ln=1)
+                pdf.set_font("Helvetica", '', 9)
+                pdf.multi_cell(0, 6, (
+                    f"Requested action: {remediation.get('requested', 'none')}\n"
+                    f"Quarantine records: {remediation.get('quarantine_count', 0)}\n"
+                    f"Post-remediation rescan: {remediation.get('post_remediation_rescan', 'unknown')}\n"
+                    f"Device release: {remediation.get('device_release', 'BLOCKED')}\n"
+                    "Permanent deletion: typed DELETE and hash verification required"
+                ))
             if quarantine_records:
                 pdf.ln(4)
                 pdf.set_x(pdf.l_margin)
@@ -3039,6 +3085,13 @@ def handle_usb_device(device):
         storage_trust_invalidated = False
         storage_trust_entry = None
         if detected_device_type == "storage":
+            # Persist the content baseline after every complete scan, including
+            # an unsafe result.  This is a baseline record, not authorization.
+            if storage_fingerprint and not usb_info.get("scan_coverage", {}).get("incomplete"):
+                trust_storage_device(
+                    vid_pid, usb_info, storage_fingerprint, file_hashes,
+                    verdict="MALICIOUS" if malware_detected else "CLEAN",
+                )
             storage_trust_entry = STORAGE_WHITELIST.get(vid_pid)
             if storage_trust_entry:
                 if storage_trust_entry.get("serial") == usb_info.get("serial") and storage_trust_entry.get("fingerprint") == storage_fingerprint:
@@ -3142,6 +3195,7 @@ def handle_usb_device(device):
             print()
             print(Colors.CYAN + "  You have two options:" + Colors.END)
             print("    [y] QUARANTINE the malicious files and allow access to the rest of the drive")
+            print("    [d] DELETE the malicious files (requires typing DELETE)")
             print("    [n] BLOCK the entire drive (no access)")
             print()
             print(Colors.CYAN + "  Note: Quarantined files are moved to a secure vault and can be" + Colors.END)
@@ -3163,11 +3217,30 @@ def handle_usb_device(device):
                         "y": ("y", "CONFIRM quarantine, verify removal, then rescan/release by policy"),
                         "yes": ("y", "CONFIRM quarantine, verify removal, then rescan/release by policy"),
                         "2": ("n", "BLOCK the entire device; do not modify its files"),
+                        "d": ("d", "DELETE files after typed DELETE confirmation"),
                         "n": ("n", "BLOCK the entire device; do not modify its files"),
                         "no": ("n", "BLOCK the entire device; do not modify its files"),
                     },
                     default="n", timeout=60,
                 )
+
+            if user_input == 'd':
+                if UI_MODE:
+                    confirm_resp = prompt_ui("delete_confirmation", {"device": usb_info, "word": "DELETE"})
+                    confirmation = str((confirm_resp or {}).get("confirmation", "")).strip()
+                else:
+                    confirmation = input("Type DELETE to permanently remove the detected files: ").strip()
+                if confirmation != "DELETE":
+                    print(Colors.RED + "[!] Deletion not confirmed; device remains blocked." + Colors.END)
+                    user_input = "n"
+                else:
+                    # Deletion uses the same verified quarantine operation,
+                    # then removes only the vault copy after hash validation.
+                    valid_delete, _ = validate_action("delete", typed_confirmation=confirmation)
+                    user_input = "y" if valid_delete else "n"
+                    delete_after_quarantine = valid_delete
+            else:
+                delete_after_quarantine = False
 
             if user_input == 'y':
                 print()
@@ -3197,11 +3270,30 @@ def handle_usb_device(device):
                         all_quarantined = False
                 
                 if all_quarantined:
-                    malware_detected = False
-                    storage_risk = 0
-                    sanitized = True
+                    if delete_after_quarantine:
+                        for entry in _read_quarantine_entries_for_device(vid_pid):
+                            qfile = entry.get("quarantine_path")
+                            if qfile and os.path.exists(qfile) and quarantine_policy.integrity_matches(qfile, entry.get("sha256")):
+                                os.remove(qfile)
+                        flags.append("REMEDIATION: typed DELETE confirmed; quarantine copies removed")
+                    # Always rescan the cleaned mount before release.
+                    rescan_findings = []
+                    for item in scanned_storage:
+                        try:
+                            subprocess.run(["mount", "-o", "remount,ro,nosuid,nodev,noexec", item["mount_path"]], capture_output=True, timeout=15)
+                            _, _, remaining_bad, _, _ = scan_storage(item["mount_path"], usb_info, previous_entry=None, cancel_event=cancel_event)
+                            rescan_findings.extend(remaining_bad)
+                        except Exception as exc:
+                            rescan_findings.append({"path": item["mount_path"], "error": str(exc)})
+                    if rescan_findings:
+                        all_quarantined = False
+                        flags.append("REMEDIATION FAILED: post-remediation rescan still found threats")
+                    malware_detected = bool(rescan_findings)
+                    storage_risk = 0 if not malware_detected else storage_risk
+                    sanitized = not malware_detected
                     flags.append(f"REMEDIATION: {quarantined_count} malicious file(s) moved to quarantine vault")
-                    print(Colors.GREEN + Colors.BOLD + f"\n  [OK] All {quarantined_count} malicious files quarantined. Drive is now safe to use." + Colors.END)
+                    if sanitized:
+                        print(Colors.GREEN + Colors.BOLD + f"\n  [OK] Remediation verified by a complete clean rescan." + Colors.END)
                     print(Colors.CYAN + f"  Quarantine vault: {QUARANTINE_DIR}" + Colors.END)
                     print(Colors.CYAN + f"  To manage: python3 changed.py --quarantine list" + Colors.END)
                 else:
@@ -3501,6 +3593,13 @@ def handle_usb_device(device):
             "trust_invalidated": storage_trust_invalidated,
         }
         usb_info["quarantine_records"] = _read_quarantine_entries_for_device(vid_pid)
+        usb_info["remediation"] = {
+            "requested": "quarantine" if sanitized else ("blocked" if original_malware_detected else "none"),
+            "quarantine_count": len(usb_info["quarantine_records"]),
+            "post_remediation_rescan": "CLEAN" if sanitized else ("NOT_PERFORMED" if not original_malware_detected else "REQUIRED_OR_FAILED"),
+            "device_release": final_decision,
+            "destructive_delete_requires_typed_confirmation": True,
+        }
         flags.extend([
             f"VERDICT: {verdict}",
             f"Hardware fingerprint: {usb_info.get('hardware_fingerprint', 'unavailable')}",

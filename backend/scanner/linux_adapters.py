@@ -53,6 +53,9 @@ def classify_udev_properties(properties: dict[str, Any]) -> dict[str, Any]:
         capabilities.add("keyboard")
     if properties.get("ID_INPUT_MOUSE"):
         capabilities.add("mouse")
+    # udev may expose keyboard/mouse without a literal HID property.
+    if {"keyboard", "mouse"} & capabilities:
+        capabilities.add("hid")
     if properties.get("ID_FS_UUID") or properties.get("DEVTYPE") in {"partition", "disk"}:
         capabilities.add("storage")
     if properties.get("ID_MTP_DEVICE") or properties.get("ID_PTP_DEVICE"):

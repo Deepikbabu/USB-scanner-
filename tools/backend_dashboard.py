@@ -166,7 +166,7 @@ class Window(QMainWindow):
             if event == "scan_progress":
                 self.progress.setValue(int(payload.get("progress", payload.get("percent", 0)) or 0))
                 self.apply_normalized(payload)
-            if event in {"email_queued", "email_delivery", "email_status"}:
+            if event in {"email_queued", "email_delivery", "email_status", "email_delivery_updated"}:
                 self.apply_normalized(payload)
             if event in {"report_ready", "incident_completed"}:
                 self.values["verdict"].setText(str(payload.get("verdict", "-")))
@@ -195,6 +195,13 @@ class Window(QMainWindow):
         self.apply_normalized(data)
 
     def show_action(self, action):
+        if action.get("action") == "delete_confirmation" or action.get("kind") == "delete_confirmation":
+            from PyQt6.QtWidgets import QInputDialog
+            value, ok = QInputDialog.getText(self, "Confirm permanent deletion",
+                                             "Type DELETE to permanently delete the detected files:")
+            self.client.command("submit_ui_response", {"answer": "d" if ok else "n",
+                                                         "confirmation": value if ok else ""})
+            return
         options = action.get("options") or []
         box = QMessageBox(self)
         box.setWindowTitle(str(action.get("title", "USB action required")))
