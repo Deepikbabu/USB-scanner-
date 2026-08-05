@@ -27,7 +27,10 @@ def assign_session_recipient(recipient: str) -> int:
 
 def queue_incident_email(incident_id: str, verdict: str,
                          json_report: str | None, pdf_report: str | None) -> bool:
-    if verdict not in {"SUSPICIOUS", "DANGEROUS", "INCOMPLETE"}:
+    # A session recipient requested reports for this scan.  Queue clean and
+    # trusted reports as well as incidents; the recipient controls delivery,
+    # while the report still contains the final verdict.
+    if verdict not in {"CLEAN", "TRUSTED", "SUSPICIOUS", "DANGEROUS", "INCOMPLETE"}:
         return False
     subject, body = incident_message(incident_id, verdict, json_report)
     attachments = [value for value in (pdf_report, json_report) if value]

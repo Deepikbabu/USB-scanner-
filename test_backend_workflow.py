@@ -31,6 +31,16 @@ def test_phase2_content_mime_and_pdf_evidence():
     assert "PDF JavaScript present" in result["evidence"]
     assert "PDF embedded object present" in result["evidence"]
 
+def test_android_apk_static_evidence():
+    import io, zipfile
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as apk:
+        apk.writestr("AndroidManifest.xml", b"android.permission.RECORD_AUDIO")
+        apk.writestr("classes.dex", b"dex\n035")
+    result = analyze_content(output.getvalue(), "sample.apk")
+    assert "Android APK manifest present" in result["evidence"]
+    assert "Android DEX bytecode present" in result["evidence"]
+
 def test_phase3_manifest_fingerprint_detects_content_drift():
     baseline = [{"relative_path": "docs/a.txt", "size": 3, "mtime_ns": 10, "sha256": "aaa"}]
     assert manifest_fingerprint(baseline) == manifest_fingerprint(list(reversed(baseline)))

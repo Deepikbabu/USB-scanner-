@@ -90,6 +90,38 @@ def archive_evidence(data: bytes, max_entries: int = 10000) -> list[str]:
         findings.append("Malformed archive")
     return findings
 
+def android_apk_evidence(data: bytes) -> list[str]:
+    """Static APK signals; never executes Android code."""
+    if not data.startswith(b"PK\x03\x04"):
+        return []
+    findings: list[str] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as apk:
+            names = set(apk.namelist())
+            if "AndroidManifest.xml" not in names:
+                return []
+            findings.append("Android APK manifest present")
+            if "classes.dex" in names or any(name.startswith("classes") and name.endswith(".dex") for name in names):
+                findings.append("Android DEX bytecode present")
+            if any(name.startswith("lib/") and name.endswith((".so", ".elf")) for name in names):
+                findings.append("Android native library present")
+            manifest = apk.read("AndroidManifest.xml")[:4 * 1024 * 1024].lower()
+            dangerous = {
+                b"android.permission.request_install_packages": "APK can request package installation",
+                b"android.permission.system_alert_window": "APK requests overlay permission",
+                b"android.permission.accessibility_service": "APK references accessibility service",
+                b"android.permission.read_sms": "APK requests SMS read access",
+                b"android.permission.send_sms": "APK requests SMS send access",
+                b"android.permission.record_audio": "APK requests microphone access",
+                b"android.permission.camera": "APK requests camera access",
+            }
+            for marker, message in dangerous.items():
+                if marker in manifest:
+                    findings.append(message)
+    except (OSError, zipfile.BadZipFile, KeyError):
+        findings.append("Malformed Android APK")
+    return findings
+
 def fuzzy_hash(data: bytes) -> str:
     """Portable similarity seed; optional TLSH/ssdeep can replace this value."""
     return hashlib.sha256(data[:1024 * 1024]).hexdigest()[:32]
@@ -105,7 +137,8 @@ def entropy(data: bytes) -> float:
 
 def analyze_content(data: bytes, name: str = "") -> dict[str, Any]:
     executable = parse_executable(data)
-    evidence = office_macro_evidence(data) + pdf_evidence(data) + archive_evidence(data)
+    evidence = (office_macro_evidence(data) + pdf_evidence(data) +
+                archive_evidence(data) + android_apk_evidence(data))
     return {"mime": detect_mime(data, name), "executable": executable,
             "evidence": evidence, "fuzzy_hash": fuzzy_hash(data),
             "entropy": round(entropy(data), 3)}

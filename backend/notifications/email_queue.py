@@ -50,9 +50,19 @@ class EmailQueue:
                 recipient: str | None = None) -> bool:
         config = load_email_config()
         if not config.enabled:
+            try:
+                from backend.ipc import publish_event
+                publish_event("email_delivery_updated", {"status": "DISABLED", "incident_id": incident_id}, incident_id)
+            except Exception:
+                pass
             return False
         recipients = [recipient] if recipient else list(config.recipients)
         if not config.smtp_ready:
+            try:
+                from backend.ipc import publish_event
+                publish_event("email_delivery_updated", {"status": "FAILED", "error": "SMTP configuration incomplete", "incident_id": incident_id}, incident_id)
+            except Exception:
+                pass
             raise RuntimeError("email is enabled but SMTP host or sender is incomplete")
         status = "QUEUED" if recipients else "PENDING_RECIPIENT"
         now = time.time()

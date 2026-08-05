@@ -21,7 +21,7 @@ def incident_message(incident_id: str, verdict: str, json_report: str | None) ->
     verdict = report_verdict
     risk = payload.get("risk_breakdown", {})
     findings = payload.get("flags") or payload.get("findings") or []
-    subject_prefix = "CRITICAL" if verdict == "DANGEROUS" else "WARNING"
+    subject_prefix = "CRITICAL" if verdict == "DANGEROUS" else "INFO" if verdict in {"CLEAN", "TRUSTED"} else "WARNING"
     subject = f"{subject_prefix}: USB incident {incident_id} - {verdict}"
     lines = [
         "USB Security Engine incident notification", "",

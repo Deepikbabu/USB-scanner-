@@ -69,7 +69,7 @@ class Window(QMainWindow):
         super().__init__(); self.setWindowTitle("USB Scanner Backend Status"); self.resize(820, 560)
         root = QWidget(); grid = QGridLayout(root); self.setCentralWidget(root)
         self.values = {}
-        fields = ["connection", "state", "device", "fingerprint", "files", "scanned",
+        fields = ["connection", "state", "device", "classification", "fingerprint", "files", "scanned",
                   "failed", "skipped", "coverage", "verdict", "email"]
         for row, field in enumerate(fields):
             grid.addWidget(QLabel(field.replace("_", " ").title() + ":"), row, 0)
@@ -162,6 +162,7 @@ class Window(QMainWindow):
             if event in {"device", "device_classified", "device_state"}:
                 device = payload.get("device") if isinstance(payload.get("device"), dict) else payload
                 self.values["device"].setText(str(device.get("name") or device.get("model") or device.get("manufacturer") or "-"))
+                self.values["classification"].setText(str(device.get("detected_device_type") or device.get("device_type") or device.get("category") or "-"))
                 self.values["fingerprint"].setText(str(device.get("hardware_fingerprint") or device.get("fingerprint") or "-"))
             if event == "scan_progress":
                 self.progress.setValue(int(payload.get("progress", payload.get("percent", 0)) or 0))
@@ -181,6 +182,7 @@ class Window(QMainWindow):
         device = data.get("device") if isinstance(data, dict) else None
         if isinstance(device, dict):
             self.values["device"].setText(str(device.get("name") or device.get("model") or "-"))
+            self.values["classification"].setText(str(device.get("detected_device_type") or device.get("device_type") or device.get("category") or "-"))
             self.values["fingerprint"].setText(str(device.get("hardware_fingerprint") or "-"))
         coverage = data.get("scan_coverage", {}) if isinstance(data, dict) else {}
         if isinstance(coverage, dict):
