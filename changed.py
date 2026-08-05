@@ -1822,8 +1822,6 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
         # independent of mount path and changes when files are added, removed,
         # renamed, resized, or their contents change.
         storage_fingerprint = manifest_fingerprint(file_hashes)
-    if isinstance(device_info, dict):
-        device_info.setdefault("scan_coverage", {})["manifest_fingerprint"] = storage_fingerprint
     print(f"[*] Incremental scan: {cached_files} unchanged cached file(s), "
           f"{max(0, total_files - cached_files)} fully scanned file(s)")
     if isinstance(device_info, dict):
@@ -1849,6 +1847,7 @@ def scan_storage(mount_path, device_info=None, previous_entry=None, cancel_event
             "processed_files": 0, "files_failed": 0, "files_skipped": 0,
             "engine_signature": scan_engine_signature(),
         })
+        coverage["manifest_fingerprint"] = storage_fingerprint
         coverage["total_files"] += total_files
         coverage["cached_files"] += cached_files
         coverage["fully_scanned_files"] += max(0, total_files - cached_files)
