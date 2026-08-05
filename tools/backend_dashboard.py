@@ -15,7 +15,9 @@ from PyQt6.QtCore import QObject, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QApplication, QGridLayout, QLabel, QLineEdit, QMainWindow, QProgressBar, QTextEdit, QWidget, QPushButton, QMessageBox
 
-SOCKET = os.environ.get("USB_SCANNER_SOCKET", "/run/usb-scanner/backend.sock")
+# Production socket path is fixed for normal dashboard use. Custom socket
+# overrides are intentionally not required to launch the dashboard.
+SOCKET = "/run/usb-scanner/backend.sock"
 
 class Client(QObject):
     message = pyqtSignal(dict)
@@ -93,6 +95,58 @@ class Window(QMainWindow):
             self.log.append(f"Email recipient submitted to backend: {address}")
         else:
             self.log.append("Email recipient could not be submitted: backend offline")
+    def apply_normalized(self, payload):
+        if not isinstance(payload, dict): return
+        report = payload.get("report") if isinstance(payload.get("report"), dict) else payload
+        if report is not payload:
+            payload = {**payload, **report}
+        coverage = payload.get("scan_coverage") if isinstance(payload.get("scan_coverage"), dict) else payload
+        aliases = {
+            "files": ("files_discovered", "total_files", "files"),
+            "scanned": ("files_scanned", "processed_files", "fully_scanned_files"),
+            "failed": ("files_failed", "failed_files", "timed_out_files"),
+            "skipped": ("files_skipped", "skipped_files"),
+        }
+        for field, names in aliases.items():
+            for name in names:
+                if name in coverage:
+                    self.values[field].setText(str(coverage[name])); break
+        # Some backend events use ``total``/``processed`` and some use the
+        # explicit names above.  Accept both so the dashboard remains a view
+        # of the backend rather than depending on one event version.
+        fallback_aliases = {
+            "files": ("total", "count"),
+            "scanned": ("processed", "scanned"),
+            "failed": ("failed",),
+            "skipped": ("skipped",),
+        }
+        for field, names in fallback_aliases.items():
+            if self.values[field].text() == "-":
+                for name in names:
+                    if name in coverage:
+                        self.values[field].setText(str(coverage[name])); break
+        complete = coverage.get("scan_complete")
+        if complete is None and "incomplete" in coverage:
+            complete = not bool(coverage.get("incomplete"))
+        if complete is not None:
+            self.values["coverage"].setText("COMPLETE" if complete else "INCOMPLETE")
+        elif coverage.get("total_files", coverage.get("total")) is not None:
+            total = int(coverage.get("total_files", coverage.get("total")) or 0)
+            scanned = int(coverage.get("processed_files", coverage.get("processed", coverage.get("fully_scanned_files", 0))) or 0)
+            self.values["coverage"].setText(f"{(scanned / total * 100):.1f}%" if total else "100%")
+        verdict = payload.get("verdict")
+        if verdict: self.values["verdict"].setText(str(verdict))
+        email = payload.get("email_status")
+        if isinstance(email, dict):
+            self.values["email"].setText(str(email.get("status") or ("READY" if email.get("ready") else "NOT CONFIGURED")))
+        elif email: self.values["email"].setText(str(email))
+        elif payload.get("status") and (payload.get("recipient") or payload.get("email")):
+            self.values["email"].setText(str(payload.get("status")))
+        for button, key, label in ((self.pdf, "pdf_path", "Open PDF report"),
+                                   (self.json, "json_path", "Open JSON report")):
+            path = payload.get(key)
+            if path:
+                button.setProperty("path", path); button.setText(label); button.setEnabled(True)
     @staticmethod
     def open_report(path):
         if path: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
@@ -105,9 +159,15 @@ class Window(QMainWindow):
             event = message.get("event"); payload = message.get("data", {}) or {}
             self.log.append(f"{event}: {json.dumps(payload, default=str)}")
             if event == "device_state": self.values["state"].setText(str(payload.get("state", "-")))
+            if event in {"device", "device_classified", "device_state"}:
+                device = payload.get("device") if isinstance(payload.get("device"), dict) else payload
+                self.values["device"].setText(str(device.get("name") or device.get("model") or device.get("manufacturer") or "-"))
+                self.values["fingerprint"].setText(str(device.get("hardware_fingerprint") or device.get("fingerprint") or "-"))
             if event == "scan_progress":
-                self.progress.setValue(int(payload.get("progress", 0)))
-                self.values["files"].setText(str(payload.get("files", "-")))
+                self.progress.setValue(int(payload.get("progress", payload.get("percent", 0)) or 0))
+                self.apply_normalized(payload)
+            if event in {"email_queued", "email_delivery", "email_status"}:
+                self.apply_normalized(payload)
             if event in {"report_ready", "incident_completed"}:
                 self.values["verdict"].setText(str(payload.get("verdict", "-")))
                 self.progress.setValue(100)
@@ -117,6 +177,7 @@ class Window(QMainWindow):
                     button.setProperty("path", path)
                     button.setText(label if path else f"{label} unavailable")
                     button.setEnabled(bool(path))
+                self.apply_normalized(payload)
         device = data.get("device") if isinstance(data, dict) else None
         if isinstance(device, dict):
             self.values["device"].setText(str(device.get("name") or device.get("model") or "-"))
@@ -131,6 +192,7 @@ class Window(QMainWindow):
             self.values["coverage"].setText("COMPLETE" if complete is True else "INCOMPLETE" if complete is False else "-")
         email = data.get("email_status") if isinstance(data, dict) else None
         if isinstance(email, dict): self.values["email"].setText("READY" if email.get("ready") else "NOT CONFIGURED")
+        self.apply_normalized(data)
 
     def show_action(self, action):
         options = action.get("options") or []

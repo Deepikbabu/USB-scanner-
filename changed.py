@@ -3272,6 +3272,10 @@ def handle_usb_device(device):
             print("\n  Scan Coverage:")
             print(f"    Total files  : {coverage.get('total_files', 0)}")
             print(f"    Fully scanned: {coverage.get('fully_scanned_files', 0)}")
+            print(f"    Processed    : {coverage.get('processed_files', 0)}")
+            print(f"    Failed       : {coverage.get('files_failed', 0)}")
+            print(f"    Skipped      : {coverage.get('files_skipped', 0)}")
+            print(f"    Scan complete: {'YES' if coverage.get('scan_complete') else 'NO'}")
             print(f"    Cached/verified: {coverage.get('cached_files', 0)}")
             print(f"    Cache permitted: {coverage.get('cache_reuse_allowed', False)}")
         if detected_device_type in {"keyboard", "mouse"} and vid_pid in HID_WHITELIST:
